@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 @Injectable()
 export class TrelloService {
-  // Almacenamiento en memoria
+  
   private tokenStore = new Map<string, string>();
 
   getOAuthUrl(email: string): string {

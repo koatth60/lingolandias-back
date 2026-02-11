@@ -7,7 +7,6 @@ import axios from 'axios';
 export class TrelloController {
   constructor(private readonly trelloService: TrelloService) {}
 
-  // Endpoint to get a user's Trello token by email
   @Get('token')
   async getTrelloToken(@Query('email') email: string, @Res() res: Response) {
     const token = this.trelloService.getTokenByEmail(email);
@@ -26,14 +25,12 @@ export class TrelloController {
     }
   }
 
-  // Endpoint to start Trello OAuth for a user
   @Get('auth')
   async startTrelloOAuth(@Query('email') email: string, @Res() res: Response) {
     const authUrl = this.trelloService.getOAuthUrl(email);
     return res.status(HttpStatus.OK).json({ url: authUrl });
   }
 
-  // Endpoint para guardar el token de Trello por email
   @Post('save-token')
   async saveTrelloToken(
     @Body('email') email: string,
@@ -47,7 +44,6 @@ export class TrelloController {
     return res.status(HttpStatus.OK).json({ message: 'Token saved successfully.' });
   }
 
-  // Endpoint para obtener boards de Trello
   @Get('boards')
   async getTrelloBoards(@Query('email') email: string, @Res() res: Response) {
     try {
@@ -85,7 +81,6 @@ export class TrelloController {
     }
   }
 
-  // Endpoint para obtener listas de un board
   @Get('lists')
   async getTrelloLists(
     @Query('email') email: string,
@@ -173,7 +168,6 @@ export class TrelloController {
     }
   }
 
-  // ✅ AÑADE ESTO AL FINAL - Endpoint para obtener tarjetas de una lista
   @Get('cards')
   async getTrelloCards(
     @Query('email') email: string,
@@ -214,4 +208,4 @@ export class TrelloController {
       });
     }
   }
-}  // ← ESTA ES LA ÚLTIMA LLAVE QUE CIERRA LA CLASE
+}  
