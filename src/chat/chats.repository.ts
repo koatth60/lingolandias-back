@@ -133,6 +133,7 @@ export class ChatsRepository {
       'uuid-teacher-english': 'teachersEnglishRoom',
       'uuid-teacher-spanish': 'teachersSpanishRoom',
       'uuid-teacher-polish': 'teachersPolishRoom',
+      'uuid-support': 'supportRoom',
     };
 
     // Asignación de columna según el room mapeado

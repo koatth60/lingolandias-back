@@ -38,6 +38,19 @@ export const teacherLanguageStrategy: CounterStrategy = {
   },
 };
 
+export const supportRoomStrategy: CounterStrategy = {
+  roomPattern: /^uuid-support$/,
+  applyConditions: (qb) => {
+    qb.andWhere(
+      new Brackets((subQb) => {
+        subQb
+          .where('user.role = :teacherRole', { teacherRole: 'teacher' })
+          .orWhere('user.role = :adminRole', { adminRole: 'admin' });
+      }),
+    );
+  },
+};
+
 export const randomRoomStrategy: CounterStrategy = {
   roomPattern: /^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i,
   applyConditions: (qb, room) => {
