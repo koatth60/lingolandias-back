@@ -30,6 +30,9 @@ export class GlobalChat {
   @Column({ type: 'varchar', length: 255, nullable: true })
   userUrl?: string;
 
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  userRole?: string;
+
   @Column({ default: 0 })
   unreadCount: number;
 

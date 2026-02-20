@@ -15,6 +15,9 @@ export class Settings {
   @Column({ type: 'boolean', default: false })
   darkMode: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  notificationSound: boolean;
+
   @Column({ type: 'varchar', default: 'en' })
   language: string;
 

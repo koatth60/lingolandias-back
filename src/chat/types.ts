@@ -13,4 +13,5 @@ export type CounterField =
   | 'teachersEnglishRoom'
   | 'teachersSpanishRoom'
   | 'teachersPolishRoom'
-  | 'randomRoom';
+  | 'randomRoom'
+  | 'supportRoom';

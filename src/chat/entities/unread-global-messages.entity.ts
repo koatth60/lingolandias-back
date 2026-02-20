@@ -43,4 +43,7 @@ export class UnreadGlobalMessage {
 
   @Column({ type: 'int', default: 0 })
   teachersPolishRoom: number;
+
+  @Column({ type: 'int', default: 0 })
+  supportRoom: number;
 }

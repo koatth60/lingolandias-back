@@ -14,6 +14,7 @@ import {
   CounterStrategy,
   generalLanguageStrategy,
   randomRoomStrategy,
+  supportRoomStrategy,
   teacherLanguageStrategy,
 } from './chat/strategies/counter-strategies';
 import { UnreadCounterService } from './chat/unread-counter.service';
@@ -29,6 +30,7 @@ export class VideoCallsGateway
   implements OnGatewayConnection, OnGatewayDisconnect
 {
   private readonly counterStrategies: CounterStrategy[] = [
+    supportRoomStrategy,
     generalLanguageStrategy,
     teacherLanguageStrategy,
     randomRoomStrategy,
@@ -199,7 +201,53 @@ export class VideoCallsGateway
     }
   }
 
+  @SubscribeMessage('supportChat')
+  async handleSupportChat(
+    socket: Socket,
+    data: {
+      username: string;
+      email: string;
+      room: string;
+      message: string;
+      userRole?: string;
+      userUrl?: string;
+    },
+  ) {
+    try {
+      const globalChatData = new GlobalChat();
+      globalChatData.username = data.username;
+      globalChatData.email = data.email;
+      globalChatData.room = 'uuid-support';
+      globalChatData.message = data.message;
+      globalChatData.timestamp = new Date();
+      if (data.userRole) globalChatData.userRole = data.userRole;
+      if (data.userUrl) globalChatData.userUrl = data.userUrl;
+      await this.chatsRepository.saveGlobalChat(globalChatData);
+
+      await this.unreadCounterService.bulkIncrementCounter(
+        'supportRoom',
+        (qb) => supportRoomStrategy.applyConditions(qb, 'uuid-support'),
+        data.email,
+      );
+
+      this.server.to('uuid-support').emit('supportChat', globalChatData);
+      socket.broadcast.emit('newUnreadSupportMessage', { room: 'uuid-support' });
+    } catch (err) {}
+  }
+
+  @SubscribeMessage('deleteSupportChat')
+  async handleDeleteSupportChat(
+    socket: Socket,
+    data: { messageId: string },
+  ) {
+    try {
+      await this.chatsRepository.deleteGlobalChat(data.messageId);
+      this.server.to('uuid-support').emit('supportChatDeleted', { messageId: data.messageId });
+    } catch (err) {}
+  }
+
   private getCounterField(room: string): CounterField {
+    if (room === 'uuid-support') return 'supportRoom';
     if (room.startsWith('uuid-teacher-')) {
       const lang = room.split('-')[2];
       return `teachers${this.capitalize(lang)}Room` as CounterField;
