@@ -21,7 +21,9 @@ export class Settings {
   @Column({ type: 'varchar', default: 'en' })
   language: string;
 
-  @OneToOne(() => User, (user) => user.settings)
-  @JoinColumn()
-  user: User;
+  @OneToOne(() => User, (user) => user.settings, { 
+  onDelete: 'CASCADE'  
+})
+@JoinColumn()
+user: User;
 }

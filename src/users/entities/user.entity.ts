@@ -84,8 +84,11 @@ export class User {
   @OneToMany(() => UnreadGlobalMessage, (unreadMessage) => unreadMessage.user)
   unreadMessages: UnreadGlobalMessage[];
 
-  @OneToOne(() => Settings, (settings) => settings.user, { cascade: true })
-  settings: Settings;
+  @OneToOne(() => Settings, (settings) => settings.user, { 
+  cascade: true,
+  onDelete: 'CASCADE' 
+})
+settings: Settings;
 }
 
 @Entity('schedules')
