@@ -5,14 +5,10 @@ import { Schedule, User } from 'src/users/entities/user.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersRepository } from 'src/users/users.repository';
 import { ScheduleRepository } from 'src/users/schedule.repository';
-import { VideoCallsGateway } from 'src/videocalls.gateaway';
-import { Chat } from 'src/chat/entities/chat.entity';
-import { ChatsRepository } from 'src/chat/chats.repository';
 import { MailService } from 'src/mail/mail.service';
-import { GlobalChat } from 'src/chat/entities/global-chat.entity';
 import { UsersModule } from 'src/users/users.module';
-import { UnreadGlobalMessage } from 'src/chat/entities/unread-global-messages.entity';
 import { ChatModule } from '../chat/chat.module';
+import { GatewayModule } from 'src/gateway/gateway.module';
 
 @Module({
   imports: [
@@ -22,13 +18,13 @@ import { ChatModule } from '../chat/chat.module';
     ]),
     UsersModule,
     ChatModule,
+    GatewayModule,
   ],
   controllers: [AuthController],
   providers: [
     AuthService,
     UsersRepository,
     ScheduleRepository,
-    VideoCallsGateway,
     MailService,
   ],
 })

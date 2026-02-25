@@ -1,13 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { UsersRepository } from './users.repository';
 import { ScheduleRepository } from './schedule.repository';
+import { VideoCallsGateway } from 'src/videocalls.gateaway';
 
 @Injectable()
 export class UsersService {
   constructor(
     private readonly usersRepository: UsersRepository,
     private readonly scheduleRepository: ScheduleRepository,
-    
+    private readonly gateway: VideoCallsGateway,
   ) {}
 
   async findAll() {
@@ -51,12 +52,18 @@ export class UsersService {
   }
 
   async modifySchedule(body: any) {
-    const success = await this.scheduleRepository.modifySchedule(body);
-    if (!success) {
+    const updatedSchedule = await this.scheduleRepository.modifySchedule(body);
+    if (!updatedSchedule) {
       throw new NotFoundException('Schedule not found');
     }
-    return 'success';
+    this.gateway.notifyScheduleUpdated({
+      studentId: updatedSchedule.studentId,
+      action: 'modify',
+      schedule: updatedSchedule,
+    });
+    return updatedSchedule;
   }
+
   async removeEvents(body: {
     eventIds: string[];
     teacherId: string;
@@ -66,8 +73,18 @@ export class UsersService {
     if (!success) {
       throw new NotFoundException('Events not found');
     }
+    this.gateway.notifyScheduleUpdated({
+      studentId: body.studentId,
+      action: 'remove',
+      eventIds: body.eventIds,
+    });
     return 'success';
   }
+
+  async getStudentSchedules(studentId: string) {
+    return this.scheduleRepository.findByStudentId(studentId);
+  }
+
   async addEvent(event: any) {
     const newEvent = {
       ...event,
@@ -75,10 +92,15 @@ export class UsersService {
       startTime: new Date(event.startTime),
       endTime: new Date(event.endTime),
     };
-    const success = await this.scheduleRepository.save(newEvent);
-    if (!success) {
+    const savedSchedule = await this.scheduleRepository.save(newEvent);
+    if (!savedSchedule) {
       throw new NotFoundException('Failed to create event');
     }
-    return 'success';
+    this.gateway.notifyScheduleUpdated({
+      studentId: savedSchedule.studentId,
+      action: 'add',
+      schedule: savedSchedule,
+    });
+    return savedSchedule;
   }
 }

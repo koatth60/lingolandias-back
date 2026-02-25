@@ -14,11 +14,15 @@ export class ScheduleRepository {
     return this.repository.find();
   }
 
+  async findByStudentId(studentId: string): Promise<Schedule[]> {
+    return this.repository.find({ where: { studentId } });
+  }
+
   async save(schedule: Schedule): Promise<Schedule> {
     return this.repository.save(schedule);
   }
 
-  async modifySchedule(body: any): Promise<boolean> {
+  async modifySchedule(body: any): Promise<Schedule> {
     const { eventId, start, end, newEvent } = body;
     const schedule = await this.repository.findOne({ where: { id: eventId } });
     if (!schedule) {
@@ -28,8 +32,7 @@ export class ScheduleRepository {
     schedule.endTime = new Date(end);
     schedule.initialDateTime = new Date(newEvent);
 
-    await this.repository.save(schedule);
-    return true;
+    return await this.repository.save(schedule);
   }
   async removeEvents(body: {
     eventIds: string[];

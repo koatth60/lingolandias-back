@@ -7,6 +7,7 @@ import {
   HttpStatus,
   HttpCode,
   Patch,
+  Param,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 // import { UpdateUserDto } from './dto/update-user.dto';
@@ -19,6 +20,12 @@ export class UsersController {
   @HttpCode(HttpStatus.OK)
   findAll() {
     return this.usersService.findAll();
+  }
+
+  @Get('student-schedules/:studentId')
+  @HttpCode(HttpStatus.OK)
+  getStudentSchedules(@Param('studentId') studentId: string) {
+    return this.usersService.getStudentSchedules(studentId);
   }
 
   @Post('assignstudent')
@@ -63,6 +70,7 @@ export class UsersController {
   async modifySchedule(@Body() body: any) {
     return this.usersService.modifySchedule(body);
   }
+
   @Post('removeEvents')
   @HttpCode(HttpStatus.OK)
   removeEvents(
