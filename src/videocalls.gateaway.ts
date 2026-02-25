@@ -64,6 +64,15 @@ export class VideoCallsGateway
     this.server.emit('userStatus', { id: id, online: 'offline', name: name });
   }
 
+  notifyScheduleUpdated(payload: {
+    studentId: string;
+    action: 'add' | 'remove' | 'modify';
+    schedule?: any;
+    eventIds?: string[];
+  }) {
+    this.server.emit('scheduleUpdated', payload);
+  }
+
   @SubscribeMessage('join')
   handleJoinRoom(socket: Socket, data: { username: string; room: string }) {
     try {
