@@ -14,6 +14,7 @@ import mailConfig from './config/mail.config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SettingsModule } from './settings/settings.module';
 import { TrelloModule } from './trello/trello.module';
+import { PushModule } from './push/push.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { TrelloModule } from './trello/trello.module';
     MailModule,
     SettingsModule,
     TrelloModule,
+    PushModule,
   ],
   controllers: [AppController],
   providers: [AppService],

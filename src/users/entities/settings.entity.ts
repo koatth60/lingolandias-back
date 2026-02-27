@@ -21,7 +21,10 @@ export class Settings {
   @Column({ type: 'varchar', default: 'en' })
   language: string;
 
-  @OneToOne(() => User, (user) => user.settings, { 
+  @Column({ type: 'boolean', default: false })
+  classReminders: boolean;
+
+  @OneToOne(() => User, (user) => user.settings, {
   onDelete: 'CASCADE'  
 })
 @JoinColumn()

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Settings } from '../users/entities/settings.entity';
@@ -22,6 +22,10 @@ export class SettingsService {
       where: { id: userId },
       relations: ['settings'],
     });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
 
     if (!user.settings) {
       const newSettings = this.settingsRepository.create({

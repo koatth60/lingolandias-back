@@ -126,8 +126,41 @@ export class UsersRepository {
     await this.usersRepository.save(teacher);
     await this.usersRepository.save(student);
 
+    // Strip relation objects from saved schedules to avoid circular-reference
+    // errors when socket.io tries to JSON-serialize the payload.
+    const plainSchedules = savedSchedules.map((s) => ({
+      id: s.id,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      initialDateTime: s.initialDateTime,
+      dayOfWeek: s.dayOfWeek,
+      studentId: s.studentId,
+      teacherId: s.teacherId,
+      studentName: s.studentName,
+      teacherName: s.teacherName,
+    }));
+
     return {
       message: 'Teacher and student updated successfully with schedules',
+      savedSchedules: plainSchedules,
+      studentId,
+      teacherId,
+      student: {
+        id: student.id,
+        name: student.name,
+        lastName: student.lastName,
+        email: student.email,
+        avatarUrl: student.avatarUrl,
+        role: student.role,
+      },
+      teacher: {
+        id: teacher.id,
+        name: teacher.name,
+        lastName: teacher.lastName,
+        email: teacher.email,
+        avatarUrl: teacher.avatarUrl,
+        role: teacher.role,
+      },
     };
   }
 
@@ -239,6 +272,9 @@ export class UsersRepository {
     return {
       message:
         'Students removed from teacher successfully, and schedules deleted.',
+      deletedScheduleIds: idsToDelete,
+      teacherId,
+      studentIds,
     };
   }
 

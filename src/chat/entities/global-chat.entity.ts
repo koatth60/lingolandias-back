@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  Index,
   // OneToMany,
 } from 'typeorm';
 // import { UnreadGlobalMessage } from './unread-global-messages.entity';
@@ -21,6 +22,7 @@ export class GlobalChat {
   @Column({ type: 'varchar', length: 255, nullable: true })
   avatarUrl?: string;
 
+  @Index()
   @Column({ type: 'varchar', length: 100 })
   room: string;
 

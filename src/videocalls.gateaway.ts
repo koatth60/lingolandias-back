@@ -73,6 +73,24 @@ export class VideoCallsGateway
     this.server.emit('scheduleUpdated', payload);
   }
 
+  notifyStudentAssigned(payload: {
+    teacherId: string;
+    studentId: string;
+    schedules: any[];
+    student: any;
+    teacher: any;
+  }) {
+    this.server.emit('studentAssigned', payload);
+  }
+
+  notifyStudentRemoved(payload: {
+    teacherId: string;
+    studentIds: string[];
+    deletedScheduleIds: string[];
+  }) {
+    this.server.emit('studentRemoved', payload);
+  }
+
   @SubscribeMessage('join')
   handleJoinRoom(socket: Socket, data: { username: string; room: string }) {
     try {

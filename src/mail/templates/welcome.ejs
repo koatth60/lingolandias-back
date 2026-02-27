@@ -4,84 +4,89 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Welcome to Lingolandias</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #f4f4f4;
-      color: #333;
-      margin: 0;
-      padding: 0;
-    }
-    .container {
-      width: 100%;
-      max-width: 600px;
-      margin: 20px auto;
-      background-color: #ffffff;
-      border-radius: 8px;
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-      padding: 20px;
-    }
-    .header {
-      background-color: #9c27b0;
-      color: #ffffff;
-      padding: 20px;
-      border-top-left-radius: 8px;
-      border-top-right-radius: 8px;
-      text-align: center;
-    }
-    .header h1 {
-      margin: 0;
-      font-size: 24px;
-    }
-    .content p {
-      font-size: 16px;
-      line-height: 1.5;
-      margin: 15px 0;
-    }
-    .content a {
-      color: #3a8dff;
-      text-decoration: none;
-    }
-    .footer {
-      text-align: center;
-      padding: 15px;
-      font-size: 14px;
-      color: #777;
-    }
-
-    /* Responsive Styles */
-    @media only screen and (max-width: 480px) {
-      .container {
-        padding: 15px;
-      }
-      .header h1 {
-        font-size: 20px;
-      }
-      .content p {
-        font-size: 14px;
-      }
-      .footer {
-        font-size: 12px;
-      }
-    }
-  </style>
 </head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>Welcome to Lingolandias!</h1>
-    </div>
-    <div class="content">
-      <p>Hello <%= name %>,</p>
-      <p>We're excited to have you join us at Lingolandias! Here are your login details:</p>
-      <p><strong>Email:</strong> <%= email %></p>
-      <p><strong>Password:</strong> <%= password %></p>
-      <p>You can log in to your account at <a href="https://lingolandias.com">lingolandias.com</a>.</p>
-      <p>We hope you enjoy your experience with us!</p>
-    </div>
-    <div class="footer">
-      <p>&copy; 2024 Lingolandias. All rights reserved.</p>
-    </div>
-  </div>
+<body style="margin: 0; padding: 0; background-color: #f0eef5; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f0eef5;">
+    <tr>
+      <td align="center" style="padding: 40px 20px;">
+        <table width="100%" style="max-width: 600px; border-radius: 16px; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.18);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #0d0a1e 0%, #1a1a2e 55%, #110e28 100%); padding: 40px 30px; text-align: center;">
+              <img src="https://lingolandias-academy.s3.eu-north-1.amazonaws.com/general-images/logo.png" alt="Lingolandias" style="height: 72px; margin-bottom: 20px; display: block; margin-left: auto; margin-right: auto;">
+              <h1 style="color: #ffffff; margin: 0 0 8px 0; font-size: 26px; font-weight: 800; letter-spacing: -0.5px;">Welcome to Lingolandias!</h1>
+              <p style="color: rgba(255,255,255,0.5); margin: 0; font-size: 14px;">Your world of languages starts here</p>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="background-color: #ffffff; padding: 40px 30px;">
+              <p style="font-size: 16px; color: #222; margin: 0 0 12px 0;">Hello <strong><%= name %></strong>,</p>
+              <p style="font-size: 15px; color: #555; line-height: 1.7; margin: 0 0 28px 0;">
+                We're thrilled to have you on board! Your account is all set up and ready to go. Here are your login credentials:
+              </p>
+
+              <!-- Credentials Box -->
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: #faf7ff; border: 1px solid rgba(158,47,208,0.2); border-radius: 12px; margin-bottom: 28px;">
+                <tr>
+                  <td style="padding: 24px 28px;">
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="padding-bottom: 16px; border-bottom: 1px solid rgba(158,47,208,0.12);">
+                          <p style="margin: 0 0 5px 0; font-size: 10px; color: #9E2FD0; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px;">Email</p>
+                          <p style="margin: 0; font-size: 15px; color: #333; font-weight: 500;"><%= email %></p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding-top: 16px;">
+                          <p style="margin: 0 0 5px 0; font-size: 10px; color: #9E2FD0; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px;">Temporary Password</p>
+                          <p style="margin: 0; font-size: 20px; color: #1a1a2e; font-weight: 800; letter-spacing: 3px; font-family: 'Courier New', monospace;"><%= password %></p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA Button -->
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 28px;">
+                <tr>
+                  <td align="center">
+                    <a href="https://lingolandias.com" style="display: inline-block; background: linear-gradient(135deg, #9E2FD0 0%, #7b22a8 50%, #b84a10 100%); color: #ffffff; padding: 15px 40px; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 15px; letter-spacing: 0.3px;">
+                      Start Learning &rarr;
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Security note -->
+              <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td style="background: #fffbf0; border-left: 3px solid #F6B82E; border-radius: 0 8px 8px 0; padding: 14px 16px;">
+                    <p style="margin: 0; font-size: 13px; color: #7a6000; line-height: 1.6;">
+                      For your security, we recommend changing your password after your first login.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background: #0d0a1e; padding: 24px 30px; text-align: center;">
+              <p style="margin: 0 0 8px 0; font-size: 12px; color: rgba(255,255,255,0.35);">
+                Need help? <a href="mailto:agata@lingolandias.net" style="color: #9E2FD0; text-decoration: none; font-weight: 500;">agata@lingolandias.net</a>
+              </p>
+              <p style="margin: 0; font-size: 12px; color: rgba(255,255,255,0.25);">&copy; 2025 Lingolandias. All rights reserved.</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>

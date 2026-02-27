@@ -51,4 +51,11 @@ export class ChatService {
   ): Promise<{ chatsDeleted: number; archivedChatsDeleted: number }> {
     return this.chatsRepositoy.deleteChatsByRoom(room);
   }
+
+  async getTeacherRoomSummary(
+    rooms: string[],
+    teacherEmail: string,
+  ): Promise<{ lastMessages: Record<string, any>; unreadCounts: Record<string, number> }> {
+    return this.chatsRepositoy.getTeacherRoomSummary(rooms, teacherEmail);
+  }
 }

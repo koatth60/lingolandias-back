@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  Index,
 } from 'typeorm';
 
 @Entity('chats')
@@ -19,6 +20,7 @@ export class Chat {
   @Column({ type: 'varchar', length: 255, nullable: true })
   avatarUrl?: string;
 
+  @Index()
   @Column({ type: 'varchar', length: 100 })
   room: string;
 

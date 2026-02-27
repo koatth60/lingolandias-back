@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Support Request - Lingolandias</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f0eef5; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f0eef5;">
+    <tr>
+      <td align="center" style="padding: 40px 20px;">
+        <table width="100%" style="max-width: 600px; border-radius: 16px; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.18);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #0d0a1e 0%, #1a1a2e 55%, #110e28 100%); padding: 40px 30px; text-align: center;">
+              <img src="https://lingolandias-academy.s3.eu-north-1.amazonaws.com/general-images/logo.png" alt="Lingolandias" style="height: 72px; margin-bottom: 20px; display: block; margin-left: auto; margin-right: auto;">
+              <h1 style="color: #ffffff; margin: 0 0 8px 0; font-size: 26px; font-weight: 800; letter-spacing: -0.5px;">Support Request</h1>
+              <p style="color: rgba(255,255,255,0.5); margin: 0; font-size: 14px;">A student or teacher needs your help</p>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="background-color: #ffffff; padding: 40px 30px;">
+
+              <!-- Sender info -->
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 28px;">
+                <tr>
+                  <td style="background: #f8f6fc; border: 1px solid rgba(158,47,208,0.15); border-radius: 12px; padding: 20px 24px;">
+                    <p style="margin: 0 0 8px 0; font-size: 13px; color: #9E2FD0; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">From</p>
+                    <p style="margin: 0 0 4px 0; font-size: 16px; color: #222; font-weight: 700;"><%= name %> <%= lastName %></p>
+                    <p style="margin: 0 0 4px 0; font-size: 14px; color: #555;"><a href="mailto:<%= email %>" style="color: #9E2FD0; text-decoration: none;"><%= email %></a></p>
+                    <p style="margin: 0; font-size: 13px; color: #888;">Language: <strong><%= language %></strong></p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Subject -->
+              <p style="font-size: 12px; color: #9E2FD0; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 6px 0;">Subject</p>
+              <p style="font-size: 16px; color: #222; font-weight: 600; margin: 0 0 24px 0; padding-bottom: 16px; border-bottom: 1px solid #eee;"><%= subject %></p>
+
+              <!-- Message -->
+              <p style="font-size: 12px; color: #9E2FD0; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 10px 0;">Message</p>
+              <div style="background: #fafafa; border-left: 3px solid #9E2FD0; border-radius: 0 8px 8px 0; padding: 16px 20px;">
+                <p style="margin: 0; font-size: 15px; color: #333; line-height: 1.8; white-space: pre-wrap;"><%= message %></p>
+              </div>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background: #0d0a1e; padding: 24px 30px; text-align: center;">
+              <p style="margin: 0 0 8px 0; font-size: 12px; color: rgba(255,255,255,0.35);">
+                Reply directly to this email or reach the student at <a href="mailto:<%= email %>" style="color: #9E2FD0; text-decoration: none; font-weight: 500;"><%= email %></a>
+              </p>
+              <p style="margin: 0; font-size: 12px; color: rgba(255,255,255,0.25);">&copy; 2025 Lingolandias. All rights reserved.</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

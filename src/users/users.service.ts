@@ -20,11 +20,18 @@ export class UsersService {
   }
 
   async assignStudent(body: any) {
-    const assignedUser = await this.usersRepository.assignStudent(body);
-    if (!assignedUser) {
+    const result = await this.usersRepository.assignStudent(body);
+    if (!result) {
       throw new NotFoundException('User not found');
     }
-    return assignedUser;
+    this.gateway.notifyStudentAssigned({
+      teacherId: result.teacherId,
+      studentId: result.studentId,
+      schedules: result.savedSchedules,
+      student: result.student,
+      teacher: result.teacher,
+    });
+    return result;
   }
 
   async remove(email: string) {
@@ -44,11 +51,16 @@ export class UsersService {
   }
 
   async removeStudentsFromTeacher(body: any) {
-    const success = await this.usersRepository.removeStudentsFromTeacher(body);
-    if (!success) {
+    const result = await this.usersRepository.removeStudentsFromTeacher(body);
+    if (!result) {
       throw new NotFoundException('Schedule not found');
     }
-    return success;
+    this.gateway.notifyStudentRemoved({
+      teacherId: result.teacherId,
+      studentIds: result.studentIds,
+      deletedScheduleIds: result.deletedScheduleIds,
+    });
+    return result;
   }
 
   async modifySchedule(body: any) {
@@ -83,6 +95,24 @@ export class UsersService {
 
   async getStudentSchedules(studentId: string) {
     return this.scheduleRepository.findByStudentId(studentId);
+  }
+
+  async getStudentProfile(studentId: string) {
+    const user = await this.usersRepository.findById(studentId);
+    if (!user) throw new NotFoundException('Student not found');
+    return {
+      teacher: user.teacher
+        ? {
+            id: user.teacher.id,
+            name: user.teacher.name,
+            lastName: user.teacher.lastName,
+            email: user.teacher.email,
+            avatarUrl: user.teacher.avatarUrl,
+            role: user.teacher.role,
+          }
+        : null,
+      studentSchedules: user.studentSchedules,
+    };
   }
 
   async addEvent(event: any) {
