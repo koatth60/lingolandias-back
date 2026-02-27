@@ -28,9 +28,12 @@ export class ScheduleRepository {
     if (!schedule) {
       throw new NotFoundException('Schedule not found');
     }
-    schedule.startTime = new Date(start);
+    const newStart = new Date(start);
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    schedule.startTime = newStart;
     schedule.endTime = new Date(end);
     schedule.initialDateTime = new Date(newEvent);
+    schedule.dayOfWeek = dayNames[newStart.getUTCDay()];
 
     return await this.repository.save(schedule);
   }

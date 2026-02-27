@@ -110,7 +110,8 @@ export class AuthService {
       { secret: secret, expiresIn: '1h' },
     );
 
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
+    const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
 
     await this.mailService.sendUserResetPasswordEmail(
       foundUser.name,
@@ -153,6 +154,34 @@ export class AuthService {
     await this.usersRepository.save(user);
 
     return { message: 'Password updated successfully' };
+  }
+
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    confirmPassword: string,
+  ) {
+    if (newPassword !== confirmPassword) {
+      throw new BadRequestException('New passwords do not match');
+    }
+
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      throw new BadRequestException('Current password is incorrect');
+    }
+
+    user.password = await bcrypt.hash(newPassword, 12);
+    await this.usersRepository.save(user);
+
+    await this.mailService.sendPasswordChangedEmail(user.name, user.email);
+
+    return { message: 'Password changed successfully' };
   }
 
   async verifyResetToken(token: string) {

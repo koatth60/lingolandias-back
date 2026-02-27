@@ -200,6 +200,54 @@ export class ChatsRepository {
       throw new InternalServerErrorException('Failed to fetch archived chats');
     }
   }
+  // Get last message + unread count for all teacher rooms in 2 queries
+  async getTeacherRoomSummary(
+    rooms: string[],
+    teacherEmail: string,
+  ): Promise<{ lastMessages: Record<string, any>; unreadCounts: Record<string, number> }> {
+    if (!rooms.length) return { lastMessages: {}, unreadCounts: {} };
+
+    // Query 1: latest message per room using DISTINCT ON (PostgreSQL)
+    const latestRows = await this.chatRepository
+      .createQueryBuilder('chat')
+      .select(['chat.room', 'chat.message', 'chat.userUrl', 'chat.email', 'chat.timestamp'])
+      .distinctOn(['chat.room'])
+      .where('chat.room IN (:...rooms)', { rooms })
+      .orderBy('chat.room')
+      .addOrderBy('chat.timestamp', 'DESC')
+      .getMany();
+
+    // Query 2: unread count per room (messages not from teacher, still unread)
+    const unreadRows = await this.chatRepository
+      .createQueryBuilder('chat')
+      .select('chat.room', 'room')
+      .addSelect('COUNT(*)', 'count')
+      .where('chat.room IN (:...rooms)', { rooms })
+      .andWhere('chat.unread = true')
+      .andWhere('chat.email != :email', { email: teacherEmail })
+      .groupBy('chat.room')
+      .getRawMany();
+
+    const lastMessages: Record<string, any> = {};
+    for (const row of latestRows) {
+      const isFile = Boolean(row.userUrl);
+      lastMessages[row.room] = {
+        content: isFile ? row.userUrl : row.message,
+        timestamp: row.timestamp,
+        type: isFile ? 'file' : 'text',
+        sender: row.email,
+        isFile,
+      };
+    }
+
+    const unreadCounts: Record<string, number> = {};
+    for (const row of unreadRows) {
+      unreadCounts[row.room] = parseInt(row.count, 10);
+    }
+
+    return { lastMessages, unreadCounts };
+  }
+
   // Delete all chats for a specific room
   async deleteChatsByRoom(
     room: string,

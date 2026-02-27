@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { MailService } from './mail.service';
+import { MailController } from './mail.controller';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { ConfigService } from '@nestjs/config';
 import { join } from 'path';
@@ -36,6 +37,7 @@ dotenvConfig({ path: '.env.development.development' });
       }),
     }),
   ],
+  controllers: [MailController],
   providers: [MailService],
   exports: [MailService],
 })

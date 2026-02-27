@@ -28,6 +28,12 @@ export class UsersController {
     return this.usersService.getStudentSchedules(studentId);
   }
 
+  @Get('student-profile/:studentId')
+  @HttpCode(HttpStatus.OK)
+  getStudentProfile(@Param('studentId') studentId: string) {
+    return this.usersService.getStudentProfile(studentId);
+  }
+
   @Post('assignstudent')
   @HttpCode(HttpStatus.OK)
   assignStudent(@Body() body: any) {

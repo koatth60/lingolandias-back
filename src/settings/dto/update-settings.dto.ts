@@ -12,4 +12,8 @@ export class UpdateSettingsDto {
   @IsString()
   @IsOptional()
   language?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  classReminders?: boolean;
 }

@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Query,
+  BadRequestException,
 } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { DeleteUnreadDto } from './dtos/delete-unread-dto';
@@ -67,5 +68,17 @@ export class ChatController {
       message: 'Chats deleted successfully',
       ...result,
     };
+  }
+
+  @Get('teacher-summary')
+  async getTeacherSummary(
+    @Query('rooms') roomsParam: string,
+    @Query('email') email: string,
+  ) {
+    if (!roomsParam || !email) {
+      throw new BadRequestException('rooms and email are required');
+    }
+    const rooms = roomsParam.split(',').filter(Boolean);
+    return this.chatService.getTeacherRoomSummary(rooms, email);
   }
 }

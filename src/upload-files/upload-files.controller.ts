@@ -14,14 +14,12 @@ import { diskStorage } from 'multer';
 import * as os from 'os';
 import * as fs from 'fs';
 import { S3Service } from './upload-files.service';
-import { GoogleDriveService } from './google-drive.service';
 import { UsersRepository } from 'src/users/users.repository';
 
 @Controller('upload')
 export class UploadController {
   constructor(
     private readonly s3Service: S3Service,
-    private readonly googleDriveService: GoogleDriveService,
     private readonly usersRepository: UsersRepository,
   ) {}
 

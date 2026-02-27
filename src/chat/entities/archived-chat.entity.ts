@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  Index,
 } from 'typeorm';
 
 @Entity('archived_chats')
@@ -16,6 +17,7 @@ export class ArchivedChat {
   @Column({ type: 'varchar', length: 100 })
   email: string;
 
+  @Index()
   @Column({ type: 'varchar', length: 100 })
   room: string;
 
