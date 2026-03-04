@@ -112,7 +112,6 @@ export class UploadController {
         filename: (_req, _file, cb) =>
           cb(null, `lingo-rec-${Date.now()}.webm`),
       }),
-      limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2 GB max
     }),
   )
   async uploadRecording(
