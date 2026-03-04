@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
-
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { TrelloController } from './trello.controller';
 import { TrelloService } from './trello.service';
-import { TrelloCallbackController } from './trello.callback.controller';
+import { TrelloBoard } from './entities/trello-board.entity';
+import { TrelloList } from './entities/trello-list.entity';
+import { TrelloCard } from './entities/trello-card.entity';
 
 @Module({
-  controllers: [TrelloController, TrelloCallbackController],
+  imports: [TypeOrmModule.forFeature([TrelloBoard, TrelloList, TrelloCard])],
+  controllers: [TrelloController],
   providers: [TrelloService],
   exports: [TrelloService],
 })

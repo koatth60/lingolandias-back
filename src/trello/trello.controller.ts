@@ -1,211 +1,156 @@
-import { Controller, Get, Post, Body, Query, Res, HttpStatus } from '@nestjs/common';
-import { Response } from 'express';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  Query,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
 import { TrelloService } from './trello.service';
-import axios from 'axios';
 
 @Controller('trello')
 export class TrelloController {
   constructor(private readonly trelloService: TrelloService) {}
 
-  @Get('token')
-  async getTrelloToken(@Query('email') email: string, @Res() res: Response) {
-    const token = this.trelloService.getTokenByEmail(email);
-    
-    if (token) {
-      return res.status(HttpStatus.OK).json({ 
-        success: true, 
-        token 
-      });
-    } else {
-      return res.status(HttpStatus.OK).json({ 
-        success: false, 
-        message: 'No Trello token found for this user.',
-        token: null
-      });
-    }
-  }
-
-  @Get('auth')
-  async startTrelloOAuth(@Query('email') email: string, @Res() res: Response) {
-    const authUrl = this.trelloService.getOAuthUrl(email);
-    return res.status(HttpStatus.OK).json({ url: authUrl });
-  }
-
-  @Post('save-token')
-  async saveTrelloToken(
-    @Body('email') email: string,
-    @Body('token') token: string,
-    @Res() res: Response
-  ) {
-    if (!email || !token) {
-      return res.status(HttpStatus.BAD_REQUEST).json({ message: 'Email and token are required.' });
-    }
-    this.trelloService.saveToken(email, token);
-    return res.status(HttpStatus.OK).json({ message: 'Token saved successfully.' });
-  }
+  // ─── BOARDS ──────────────────────────────────────────────────────────────
 
   @Get('boards')
-  async getTrelloBoards(@Query('email') email: string, @Res() res: Response) {
-    try {
-      const token = this.trelloService.getTokenByEmail(email);
-      
-      if (!token) {
-        return res.status(HttpStatus.BAD_REQUEST).json({
-          success: false,
-          message: 'No Trello token found. Please authenticate first.'
-        });
-      }
-      
-      const apiKey = process.env.TRELLO_API_KEY || 'ad2a9d90ff6ceaa7a8f2b3de101ec095';
-      const url = `https://api.trello.com/1/members/me/boards`;
-      
-      const response = await axios.get(url, {
-        params: {
-          key: apiKey,
-          token: token,
-          fields: 'id,name,url'
-        }
-      });
-      
-      return res.status(HttpStatus.OK).json({
-        success: true,
-        boards: response.data
-      });
-      
-    } catch (error) {
-      console.error('Error getting Trello boards:', error);
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-        success: false,
-        message: 'Error getting Trello boards'
-      });
-    }
+  async getBoards(@Query('userId') userId: string) {
+    const boards = await this.trelloService.getBoardsByUser(userId);
+    return { success: true, boards };
   }
 
-  @Get('lists')
-  async getTrelloLists(
-    @Query('email') email: string,
-    @Query('boardId') boardId: string,
-    @Res() res: Response
-  ) {
-    try {
-      const token = this.trelloService.getTokenByEmail(email);
-      
-      if (!token) {
-        return res.status(HttpStatus.BAD_REQUEST).json({
-          success: false,
-          message: 'No Trello token found.'
-        });
-      }
-      
-      const apiKey = process.env.TRELLO_API_KEY || 'ad2a9d90ff6ceaa7a8f2b3de101ec095';
-      const url = `https://api.trello.com/1/boards/${boardId}/lists`;
-      
-      const response = await axios.get(url, {
-        params: {
-          key: apiKey,
-          token: token,
-          fields: 'id,name'
-        }
-      });
-      
-      return res.status(HttpStatus.OK).json({
-        success: true,
-        lists: response.data
-      });
-      
-    } catch (error) {
-      console.error('Error getting Trello lists:', error);
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-        success: false,
-        message: 'Error getting Trello lists'
-      });
-    }
-  }
-
-  // Endpoint para crear tarjeta
-  @Post('create-card')
-  async createTrelloCard(
-    @Body('email') email: string,
-    @Body('listId') listId: string,
+  @Post('boards')
+  async createBoard(
     @Body('name') name: string,
+    @Body('background') background: string,
+    @Body('fontFamily') fontFamily: string,
+    @Body('userId') userId: string,
     @Body('description') description: string,
-    @Res() res: Response
   ) {
-    try {
-      const token = this.trelloService.getTokenByEmail(email);
-      
-      if (!token) {
-        return res.status(HttpStatus.BAD_REQUEST).json({
-          success: false,
-          message: 'No Trello token found.'
-        });
-      }
-      
-      const apiKey = process.env.TRELLO_API_KEY || 'ad2a9d90ff6ceaa7a8f2b3de101ec095';
-      const url = `https://api.trello.com/1/cards`;
-      
-      const response = await axios.post(url, null, {
-        params: {
-          key: apiKey,
-          token: token,
-          idList: listId,
-          name: name,
-          desc: description || ''
-        }
-      });
-      
-      return res.status(HttpStatus.OK).json({
-        success: true,
-        card: response.data
-      });
-      
-    } catch (error) {
-      console.error('Error creating Trello card:', error);
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-        success: false,
-        message: 'Error creating Trello card'
-      });
-    }
+    const board = await this.trelloService.createBoard({
+      name,
+      background: background || '#0079BF',
+      fontFamily: fontFamily || 'Inter',
+      userId,
+      description,
+    });
+    return { success: true, board };
   }
 
-  @Get('cards')
-  async getTrelloCards(
-    @Query('email') email: string,
-    @Query('listId') listId: string,
-    @Res() res: Response
+  @Put('boards/:id')
+  async updateBoard(
+    @Param('id') id: string,
+    @Body() data: { name?: string; background?: string; fontFamily?: string; description?: string },
   ) {
-    try {
-      const token = this.trelloService.getTokenByEmail(email);
-      
-      if (!token) {
-        return res.status(HttpStatus.BAD_REQUEST).json({
-          success: false,
-          message: 'No Trello token found.'
-        });
-      }
-      
-      const apiKey = process.env.TRELLO_API_KEY || 'ad2a9d90ff6ceaa7a8f2b3de101ec095';
-      const url = `https://api.trello.com/1/lists/${listId}/cards`;
-      
-      const response = await axios.get(url, {
-        params: {
-          key: apiKey,
-          token: token,
-          fields: 'id,name,desc,due,url'
-        }
-      });
-      
-      return res.status(HttpStatus.OK).json({
-        success: true,
-        cards: response.data
-      });
-      
-    } catch (error) {
-      console.error('Error getting Trello cards:', error);
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-        success: false,
-        message: 'Error getting Trello cards'
-      });
-    }
+    const board = await this.trelloService.updateBoard(id, data);
+    return { success: true, board };
   }
-}  
+
+  @Delete('boards/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteBoard(@Param('id') id: string) {
+    await this.trelloService.deleteBoard(id);
+    return { success: true };
+  }
+
+  // ─── LISTS ───────────────────────────────────────────────────────────────
+
+  @Get('boards/:boardId/lists')
+  async getLists(@Param('boardId') boardId: string) {
+    const lists = await this.trelloService.getListsByBoard(boardId);
+    return { success: true, lists };
+  }
+
+  @Post('boards/:boardId/lists')
+  async createList(
+    @Param('boardId') boardId: string,
+    @Body('name') name: string,
+  ) {
+    const list = await this.trelloService.createList(boardId, name);
+    return { success: true, list };
+  }
+
+  @Put('lists/:id')
+  async updateList(
+    @Param('id') id: string,
+    @Body() data: { name?: string; position?: number },
+  ) {
+    const list = await this.trelloService.updateList(id, data);
+    return { success: true, list };
+  }
+
+  @Delete('lists/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteList(@Param('id') id: string) {
+    await this.trelloService.deleteList(id);
+    return { success: true };
+  }
+
+  @Put('boards/:boardId/lists/reorder')
+  async reorderLists(
+    @Param('boardId') boardId: string,
+    @Body('orderedIds') orderedIds: string[],
+  ) {
+    await this.trelloService.reorderLists(boardId, orderedIds);
+    return { success: true };
+  }
+
+  // ─── CARDS ───────────────────────────────────────────────────────────────
+
+  @Post('lists/:listId/cards')
+  async createCard(
+    @Param('listId') listId: string,
+    @Body() data: { name: string; description?: string; dueDate?: Date; label?: string },
+  ) {
+    const card = await this.trelloService.createCard(listId, data);
+    return { success: true, card };
+  }
+
+  @Put('cards/:id')
+  async updateCard(
+    @Param('id') id: string,
+    @Body() data: { name?: string; description?: string; dueDate?: Date; label?: string; listId?: string; position?: number; checklist?: string; comments?: string; titleStyle?: string },
+  ) {
+    const card = await this.trelloService.updateCard(id, data);
+    return { success: true, card };
+  }
+
+  @Delete('cards/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteCard(@Param('id') id: string) {
+    await this.trelloService.deleteCard(id);
+    return { success: true };
+  }
+
+  @Put('cards/:id/move')
+  async moveCard(
+    @Param('id') id: string,
+    @Body('listId') listId: string,
+    @Body('position') position: number,
+  ) {
+    const card = await this.trelloService.moveCard(id, listId, position);
+    return { success: true, card };
+  }
+
+  @Put('lists/:listId/cards/reorder')
+  async reorderCards(
+    @Param('listId') listId: string,
+    @Body('orderedIds') orderedIds: string[],
+  ) {
+    await this.trelloService.reorderCards(listId, orderedIds);
+    return { success: true };
+  }
+
+  // ─── ADMIN ───────────────────────────────────────────────────────────────
+
+  @Get('admin/boards')
+  async getAllBoards() {
+    const boards = await this.trelloService.getAllBoardsWithTeachers();
+    return { success: true, boards };
+  }
+}
