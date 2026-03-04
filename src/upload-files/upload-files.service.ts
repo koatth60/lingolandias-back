@@ -4,6 +4,7 @@ import {
   ListObjectsV2Command,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createReadStream } from 'fs';
@@ -95,17 +96,21 @@ export class S3Service {
 
     const fileKey = `recordings/${subfolder}/${file.originalname}`;
 
-    // Stream from disk — avoids loading the whole file into memory
+    // Multipart upload — handles files of any size reliably.
+    // Splits into 10 MB parts uploaded in parallel, with automatic retry.
     const stream = createReadStream(file.path);
 
-    await this.s3Client.send(
-      new PutObjectCommand({
+    await new Upload({
+      client: this.s3Client,
+      queueSize: 4,          // 4 parallel part uploads
+      partSize: 10 * 1024 * 1024, // 10 MB per part
+      params: {
         Bucket: bucketName,
         Key: fileKey,
         Body: stream,
         ContentType: 'video/webm',
-      }),
-    );
+      },
+    }).done();
 
     // Ensure folder placeholders exist so the S3 folder structure persists
     // even if all recording files are later deleted.
