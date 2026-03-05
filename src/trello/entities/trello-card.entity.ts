@@ -35,7 +35,7 @@ export class TrelloCard {
   @Column({ type: 'timestamp', nullable: true })
   dueDate: Date;
 
-  @Column({ type: 'varchar', length: 50, nullable: true })
+  @Column({ type: 'text', nullable: true })
   label: string;
 
   @Column({ type: 'text', nullable: true })

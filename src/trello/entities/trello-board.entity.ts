@@ -16,10 +16,10 @@ export class TrelloBoard {
   @Column({ type: 'varchar', length: 200 })
   name: string;
 
-  @Column({ type: 'varchar', length: 100, default: '#0079BF' })
+  @Column({ type: 'text', default: '#0079BF' })
   background: string;
 
-  @Column({ type: 'varchar', length: 100, default: 'Inter' })
+  @Column({ type: 'text', default: 'Inter' })
   fontFamily: string;
 
   @Column({ type: 'varchar' })

@@ -108,7 +108,7 @@ export class TrelloService {
 
   async updateCard(
     id: string,
-    data: Partial<{ name: string; description: string; dueDate: Date; label: string; listId: string; position: number; checklist: string; comments: string }>,
+    data: Partial<{ name: string; description: string; dueDate: Date; label: string; listId: string; position: number; checklist: string; comments: string; titleStyle: string }>,
   ): Promise<TrelloCard> {
     const card = await this.cardRepo.findOne({ where: { id } });
     if (!card) throw new NotFoundException('Card not found');
