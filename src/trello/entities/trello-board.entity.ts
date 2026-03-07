@@ -5,6 +5,7 @@ import {
   OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 import { TrelloList } from './trello-list.entity';
 
@@ -22,6 +23,7 @@ export class TrelloBoard {
   @Column({ type: 'text', default: 'Inter' })
   fontFamily: string;
 
+  @Index()
   @Column({ type: 'varchar' })
   userId: string;
 

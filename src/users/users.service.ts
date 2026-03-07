@@ -19,6 +19,10 @@ export class UsersService {
     return users;
   }
 
+  async findAdminDashboard() {
+    return this.usersRepository.findAdminDashboard();
+  }
+
   async assignStudent(body: any) {
     const result = await this.usersRepository.assignStudent(body);
     if (!result) {

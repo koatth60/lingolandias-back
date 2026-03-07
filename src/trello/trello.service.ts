@@ -48,31 +48,32 @@ export class TrelloService {
     id: string,
     data: Partial<{ name: string; background: string; fontFamily: string; description: string }>,
   ): Promise<TrelloBoard> {
-    const board = await this.boardRepo.findOne({ where: { id } });
-    if (!board) throw new NotFoundException('Board not found');
-    Object.assign(board, data);
-    return this.boardRepo.save(board);
+    const result = await this.boardRepo.update(id, data);
+    if (result.affected === 0) throw new NotFoundException('Board not found');
+    return this.boardRepo.findOne({ where: { id } });
   }
 
   async deleteBoard(id: string): Promise<void> {
-    const board = await this.boardRepo.findOne({ where: { id } });
-    if (!board) throw new NotFoundException('Board not found');
-    await this.boardRepo.remove(board);
+    const result = await this.boardRepo.delete(id);
+    if (result.affected === 0) throw new NotFoundException('Board not found');
   }
 
   // ─── LISTS ───────────────────────────────────────────────────────────────
 
+  // Single query with properly ordered cards via QueryBuilder
   async getListsByBoard(boardId: string): Promise<TrelloList[]> {
-    return this.listRepo.find({
-      where: { boardId },
-      relations: ['cards'],
-      order: { position: 'ASC', createdAt: 'ASC' },
-    });
+    return this.listRepo
+      .createQueryBuilder('list')
+      .leftJoinAndSelect('list.cards', 'card')
+      .where('list.boardId = :boardId', { boardId })
+      .orderBy('list.position', 'ASC')
+      .addOrderBy('list.createdAt', 'ASC')
+      .addOrderBy('card.position', 'ASC')
+      .getMany();
   }
 
   async createList(boardId: string, name: string): Promise<TrelloList> {
-    const board = await this.boardRepo.findOne({ where: { id: boardId } });
-    if (!board) throw new NotFoundException('Board not found');
+    // Skip the board existence findOne — FK constraint will reject invalid boardId
     const count = await this.listRepo.count({ where: { boardId } });
     const list = this.listRepo.create({ name, boardId, position: count });
     const saved = await this.listRepo.save(list);
@@ -81,16 +82,14 @@ export class TrelloService {
   }
 
   async updateList(id: string, data: Partial<{ name: string; position: number }>): Promise<TrelloList> {
-    const list = await this.listRepo.findOne({ where: { id } });
-    if (!list) throw new NotFoundException('List not found');
-    Object.assign(list, data);
-    return this.listRepo.save(list);
+    const result = await this.listRepo.update(id, data);
+    if (result.affected === 0) throw new NotFoundException('List not found');
+    return this.listRepo.findOne({ where: { id } });
   }
 
   async deleteList(id: string): Promise<void> {
-    const list = await this.listRepo.findOne({ where: { id } });
-    if (!list) throw new NotFoundException('List not found');
-    await this.listRepo.remove(list);
+    const result = await this.listRepo.delete(id);
+    if (result.affected === 0) throw new NotFoundException('List not found');
   }
 
   // ─── CARDS ───────────────────────────────────────────────────────────────
@@ -99,8 +98,7 @@ export class TrelloService {
     listId: string,
     data: { name: string; description?: string; dueDate?: Date; label?: string },
   ): Promise<TrelloCard> {
-    const list = await this.listRepo.findOne({ where: { id: listId } });
-    if (!list) throw new NotFoundException('List not found');
+    // Skip the list existence findOne — FK constraint will reject invalid listId
     const count = await this.cardRepo.count({ where: { listId } });
     const card = this.cardRepo.create({ ...data, listId, position: count });
     return this.cardRepo.save(card);
@@ -110,37 +108,33 @@ export class TrelloService {
     id: string,
     data: Partial<{ name: string; description: string; dueDate: Date; label: string; listId: string; position: number; checklist: string; comments: string; titleStyle: string }>,
   ): Promise<TrelloCard> {
-    const card = await this.cardRepo.findOne({ where: { id } });
-    if (!card) throw new NotFoundException('Card not found');
-    Object.assign(card, data);
-    return this.cardRepo.save(card);
+    const result = await this.cardRepo.update(id, data);
+    if (result.affected === 0) throw new NotFoundException('Card not found');
+    return this.cardRepo.findOne({ where: { id } });
   }
 
   async deleteCard(id: string): Promise<void> {
-    const card = await this.cardRepo.findOne({ where: { id } });
-    if (!card) throw new NotFoundException('Card not found');
-    await this.cardRepo.remove(card);
+    const result = await this.cardRepo.delete(id);
+    if (result.affected === 0) throw new NotFoundException('Card not found');
   }
 
   async moveCard(cardId: string, targetListId: string, position: number): Promise<TrelloCard> {
-    const card = await this.cardRepo.findOne({ where: { id: cardId } });
-    if (!card) throw new NotFoundException('Card not found');
-    card.listId = targetListId;
-    card.position = position;
-    return this.cardRepo.save(card);
+    const result = await this.cardRepo.update(cardId, { listId: targetListId, position });
+    if (result.affected === 0) throw new NotFoundException('Card not found');
+    return this.cardRepo.findOne({ where: { id: cardId } });
   }
 
-  // Reorder lists within a board by saving new positions array
+  // Reorder lists — parallel updates instead of sequential
   async reorderLists(boardId: string, orderedIds: string[]): Promise<void> {
-    for (let i = 0; i < orderedIds.length; i++) {
-      await this.listRepo.update({ id: orderedIds[i], boardId }, { position: i });
-    }
+    await Promise.all(
+      orderedIds.map((id, i) => this.listRepo.update({ id, boardId }, { position: i })),
+    );
   }
 
-  // Reorder cards within a list
+  // Reorder cards — parallel updates instead of sequential
   async reorderCards(listId: string, orderedIds: string[]): Promise<void> {
-    for (let i = 0; i < orderedIds.length; i++) {
-      await this.cardRepo.update({ id: orderedIds[i], listId }, { position: i });
-    }
+    await Promise.all(
+      orderedIds.map((id, i) => this.cardRepo.update({ id, listId }, { position: i })),
+    );
   }
 }

@@ -84,6 +84,20 @@ export class UsersRepository {
     return users;
   }
 
+  // Lean query for admin dashboard: users without heavy relations + all schedules
+  async findAdminDashboard(): Promise<{ users: User[]; schedules: Schedule[] }> {
+    const [users, schedules] = await Promise.all([
+      this.usersRepository.find({ relations: ['settings'] }),
+      this.scheduleRepository.find(),
+    ]);
+    return { users, schedules };
+  }
+
+  // Reset all users to offline (called on server startup)
+  async resetAllOnlineStatus(): Promise<void> {
+    await this.usersRepository.update({}, { online: 'offline' } as any);
+  }
+
   async assignStudent(body: any): Promise<any> {
     const { teacherId, studentId, events } = body;
 

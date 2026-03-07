@@ -8,7 +8,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import { ChatsRepository } from './chat/chats.repository';
 import { Chat } from './chat/entities/chat.entity';
-import { Injectable, Scope } from '@nestjs/common';
+import { Injectable, OnModuleInit, Scope } from '@nestjs/common';
 import { GlobalChat } from './chat/entities/global-chat.entity';
 import {
   CounterStrategy,
@@ -19,6 +19,9 @@ import {
 } from './chat/strategies/counter-strategies';
 import { UnreadCounterService } from './chat/unread-counter.service';
 import { CounterField } from './chat/types';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { User } from './users/entities/user.entity';
 
 @Injectable({ scope: Scope.DEFAULT })
 @WebSocketGateway({
@@ -27,7 +30,7 @@ import { CounterField } from './chat/types';
   },
 })
 export class VideoCallsGateway
-  implements OnGatewayConnection, OnGatewayDisconnect
+  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
 {
   private readonly counterStrategies: CounterStrategy[] = [
     supportRoomStrategy,
@@ -39,19 +42,80 @@ export class VideoCallsGateway
   private readonly uuidRegex =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+  // socket presence tracking: socketId → userId, userId → Set<socketId>
+  private readonly socketToUser = new Map<string, string>();
+  private readonly userSockets = new Map<string, Set<string>>();
+
   @WebSocketServer() server: Server;
 
   constructor(
     private readonly chatsRepository: ChatsRepository,
     private readonly unreadCounterService: UnreadCounterService,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
   ) {}
 
-  handleConnection(socket: Socket) {
-    // console.log('A user connected:', socket.id);
+  async onModuleInit() {
+    try {
+      await this.userRepo.update({} as any, { online: 'offline' } as any);
+    } catch (_) {}
   }
 
-  handleDisconnect(socket: Socket) {
-    // console.log(`User disconnected: ${socket.id}`);
+  handleConnection(socket: Socket) {}
+
+  async handleDisconnect(socket: Socket) {
+    const userId = this.socketToUser.get(socket.id);
+    if (!userId) return;
+
+    this.socketToUser.delete(socket.id);
+    const sockets = this.userSockets.get(userId);
+    if (sockets) {
+      sockets.delete(socket.id);
+      if (sockets.size === 0) {
+        this.userSockets.delete(userId);
+        try {
+          const user = await this.userRepo.findOne({ where: { id: userId } });
+          if (user) {
+            user.online = 'offline';
+            await this.userRepo.save(user);
+            this.server.emit('userStatus', {
+              id: user.id,
+              online: 'offline',
+              name: user.name + ' ' + user.lastName,
+            });
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  @SubscribeMessage('registerUser')
+  async handleRegisterUser(socket: Socket, data: { userId: string }) {
+    const { userId } = data;
+    if (!userId) return;
+
+    const isFirstSocket = !this.userSockets.has(userId) || this.userSockets.get(userId).size === 0;
+
+    this.socketToUser.set(socket.id, userId);
+    if (!this.userSockets.has(userId)) {
+      this.userSockets.set(userId, new Set());
+    }
+    this.userSockets.get(userId).add(socket.id);
+
+    if (isFirstSocket) {
+      try {
+        const user = await this.userRepo.findOne({ where: { id: userId } });
+        if (user) {
+          user.online = 'online';
+          await this.userRepo.save(user);
+          this.server.emit('userStatus', {
+            id: user.id,
+            online: 'online',
+            name: user.name + ' ' + user.lastName,
+          });
+        }
+      } catch (_) {}
+    }
   }
 
   notifyUserOnline(user: any) {
@@ -119,6 +183,44 @@ export class VideoCallsGateway
       socket.broadcast.to(room).emit('data', data);
     } else {
     }
+  }
+
+  @SubscribeMessage('editNormalChat')
+  async handleEditNormalChat(
+    socket: Socket,
+    data: { messageId: string; room: string; newMessage: string },
+  ) {
+    try {
+      await this.chatsRepository.editNormalChat(data.messageId, data.newMessage);
+      this.server.to(data.room).emit('normalChatEdited', { messageId: data.messageId, newMessage: data.newMessage });
+    } catch (err) {}
+  }
+
+  @SubscribeMessage('editGlobalChat')
+  async handleEditGlobalChat(
+    socket: Socket,
+    data: { messageId: string; room: string; newMessage: string },
+  ) {
+    try {
+      await this.chatsRepository.editGlobalChat(data.messageId, data.newMessage);
+      this.server.to(data.room).emit('globalChatEdited', { messageId: data.messageId, newMessage: data.newMessage });
+    } catch (err) {}
+  }
+
+  @SubscribeMessage('clearNormalChat')
+  async handleClearNormalChat(
+    socket: Socket,
+    data: { room: string },
+  ) {
+    try {
+      await this.chatsRepository.deleteChatsByRoom(data.room);
+      this.server.to(data.room).emit('normalChatCleared', { room: data.room });
+    } catch (err) {}
+  }
+
+  @SubscribeMessage('notifyRead')
+  handleNotifyRead(socket: Socket, data: { room: string }) {
+    socket.broadcast.to(data.room).emit('chatMessagesRead', { room: data.room });
   }
 
   @SubscribeMessage('deleteGlobalChat')

@@ -102,6 +102,24 @@ export class ChatsRepository {
     }
   }
 
+  // Edit a regular chat message
+  async editNormalChat(id: string, message: string): Promise<void> {
+    try {
+      await this.chatRepository.update(id, { message });
+    } catch (error) {
+      throw new InternalServerErrorException('Failed to edit chat');
+    }
+  }
+
+  // Edit a global chat message
+  async editGlobalChat(id: string, message: string): Promise<void> {
+    try {
+      await this.globalChatRepository.update(id, { message });
+    } catch (error) {
+      throw new InternalServerErrorException('Failed to edit global chat');
+    }
+  }
+
   async saveUnreadMessage(body: any) {
     return await this.unreadGlobalChatRepository.save(body);
   }
@@ -210,7 +228,7 @@ export class ChatsRepository {
     // Query 1: latest message per room using DISTINCT ON (PostgreSQL)
     const latestRows = await this.chatRepository
       .createQueryBuilder('chat')
-      .select(['chat.room', 'chat.message', 'chat.userUrl', 'chat.email', 'chat.timestamp'])
+      .select(['chat.room', 'chat.message', 'chat.userUrl', 'chat.email', 'chat.timestamp', 'chat.unread'])
       .distinctOn(['chat.room'])
       .where('chat.room IN (:...rooms)', { rooms })
       .orderBy('chat.room')
@@ -236,6 +254,7 @@ export class ChatsRepository {
         timestamp: row.timestamp,
         type: isFile ? 'file' : 'text',
         sender: row.email,
+        unread: row.unread,
         isFile,
       };
     }

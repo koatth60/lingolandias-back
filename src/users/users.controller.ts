@@ -22,6 +22,12 @@ export class UsersController {
     return this.usersService.findAll();
   }
 
+  @Get('admin-dashboard')
+  @HttpCode(HttpStatus.OK)
+  adminDashboard() {
+    return this.usersService.findAdminDashboard();
+  }
+
   @Get('student-schedules/:studentId')
   @HttpCode(HttpStatus.OK)
   getStudentSchedules(@Param('studentId') studentId: string) {

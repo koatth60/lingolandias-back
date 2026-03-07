@@ -6,6 +6,7 @@ import {
   OneToMany,
   JoinColumn,
   CreateDateColumn,
+  Index,
 } from 'typeorm';
 import { TrelloBoard } from './trello-board.entity';
 import { TrelloCard } from './trello-card.entity';
@@ -21,6 +22,7 @@ export class TrelloList {
   @Column({ type: 'int', default: 0 })
   position: number;
 
+  @Index()
   @Column({ type: 'varchar' })
   boardId: string;
 
