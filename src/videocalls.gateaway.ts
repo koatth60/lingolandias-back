@@ -45,6 +45,10 @@ export class VideoCallsGateway
   // socket presence tracking: socketId → userId, userId → Set<socketId>
   private readonly socketToUser = new Map<string, string>();
   private readonly userSockets = new Map<string, Set<string>>();
+  // Grace-period timers: userId → timer. Absorbs page reloads (user reconnects within ~7s → no offline event)
+  private readonly offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Room membership: roomId → Set<userId>. Persists even after socket leaves the room.
+  private readonly roomMembers = new Map<string, Set<string>>();
 
   @WebSocketServer() server: Server;
 
@@ -73,18 +77,28 @@ export class VideoCallsGateway
       sockets.delete(socket.id);
       if (sockets.size === 0) {
         this.userSockets.delete(userId);
-        try {
-          const user = await this.userRepo.findOne({ where: { id: userId } });
-          if (user) {
-            user.online = 'offline';
-            await this.userRepo.save(user);
-            this.server.emit('userStatus', {
-              id: user.id,
-              online: 'offline',
-              name: user.name + ' ' + user.lastName,
-            });
+        // Grace period: wait 7 s before marking offline.
+        // If the user reloads the page they reconnect within ~1–2 s and the
+        // timer is cancelled, so no spurious offline/online pair is emitted.
+        const timer = setTimeout(async () => {
+          this.offlineTimers.delete(userId);
+          // Only mark offline if the user has not reconnected
+          if (!this.userSockets.has(userId)) {
+            try {
+              const user = await this.userRepo.findOne({ where: { id: userId } });
+              if (user) {
+                user.online = 'offline';
+                await this.userRepo.save(user);
+                this.server.emit('userStatus', {
+                  id: user.id,
+                  online: 'offline',
+                  name: user.name + ' ' + user.lastName,
+                });
+              }
+            } catch (_) {}
           }
-        } catch (_) {}
+        }, 7000);
+        this.offlineTimers.set(userId, timer);
       }
     }
   }
@@ -94,6 +108,15 @@ export class VideoCallsGateway
     const { userId } = data;
     if (!userId) return;
 
+    // Cancel pending offline timer (user reconnected before grace period expired — page reload)
+    // Track whether we cancelled so we know not to re-emit "online" (no "offline" was sent)
+    let suppressOnline = false;
+    if (this.offlineTimers.has(userId)) {
+      clearTimeout(this.offlineTimers.get(userId));
+      this.offlineTimers.delete(userId);
+      suppressOnline = true;
+    }
+
     const isFirstSocket = !this.userSockets.has(userId) || this.userSockets.get(userId).size === 0;
 
     this.socketToUser.set(socket.id, userId);
@@ -102,7 +125,8 @@ export class VideoCallsGateway
     }
     this.userSockets.get(userId).add(socket.id);
 
-    if (isFirstSocket) {
+    // Only broadcast "online" if this is genuinely a fresh connection (not a reload recovery)
+    if (isFirstSocket && !suppressOnline) {
       try {
         const user = await this.userRepo.findOne({ where: { id: userId } });
         if (user) {
@@ -158,6 +182,14 @@ export class VideoCallsGateway
   @SubscribeMessage('join')
   handleJoinRoom(socket: Socket, data: { username: string; room: string }) {
     try {
+      // Track user as a member of this room (persists after they leave the socket.io room)
+      const userId = this.socketToUser.get(socket.id);
+      if (userId) {
+        if (!this.roomMembers.has(data.room)) {
+          this.roomMembers.set(data.room, new Set());
+        }
+        this.roomMembers.get(data.room).add(userId);
+      }
 
       // Dejar todas las habitaciones excepto la predeterminada (propia del socket)
       const rooms = Array.from(socket.rooms); // Obtén todas las salas a las que pertenece el socket
@@ -183,6 +215,48 @@ export class VideoCallsGateway
       socket.broadcast.to(room).emit('data', data);
     } else {
     }
+  }
+
+  @SubscribeMessage('typing')
+  handleTyping(socket: Socket, data: { room: string; username: string }) {
+    socket.broadcast.to(data.room).emit('typing', { username: data.username });
+  }
+
+  @SubscribeMessage('stopTyping')
+  handleStopTyping(socket: Socket, data: { room: string }) {
+    socket.broadcast.to(data.room).emit('stopTyping', {});
+  }
+
+  @SubscribeMessage('getRoomMembers')
+  async handleGetRoomMembers(socket: Socket, data: { room: string }) {
+    try {
+      const socketIds = this.server.sockets.adapter.rooms.get(data.room);
+      if (!socketIds) {
+        socket.emit('roomMembers', { room: data.room, members: [] });
+        return;
+      }
+      const userIds = new Set<string>();
+      socketIds.forEach((sid) => {
+        const uid = this.socketToUser.get(sid);
+        if (uid) userIds.add(uid);
+      });
+      const members: { id: string; name: string; language: string; avatarUrl?: string }[] = [];
+      for (const uid of userIds) {
+        const user = await this.userRepo.findOne({
+          where: { id: uid },
+          select: ['id', 'name', 'lastName', 'language', 'avatarUrl'] as any,
+        });
+        if (user) {
+          members.push({
+            id: uid,
+            name: (user as any).name,
+            language: (user as any).language || 'english',
+            avatarUrl: (user as any).avatarUrl,
+          });
+        }
+      }
+      socket.emit('roomMembers', { room: data.room, members });
+    } catch (_) {}
   }
 
   @SubscribeMessage('editNormalChat')
@@ -220,7 +294,23 @@ export class VideoCallsGateway
 
   @SubscribeMessage('notifyRead')
   handleNotifyRead(socket: Socket, data: { room: string }) {
+    // Notify sockets currently in the room
     socket.broadcast.to(data.room).emit('chatMessagesRead', { room: data.room });
+
+    // Also notify all known room members directly (covers chat-list view where they left the room)
+    const members = this.roomMembers.get(data.room);
+    if (members) {
+      for (const memberId of members) {
+        const memberSockets = this.userSockets.get(memberId);
+        if (memberSockets) {
+          for (const sid of memberSockets) {
+            if (sid !== socket.id) {
+              this.server.to(sid).emit('chatMessagesRead', { room: data.room });
+            }
+          }
+        }
+      }
+    }
   }
 
   @SubscribeMessage('deleteGlobalChat')
@@ -267,6 +357,7 @@ export class VideoCallsGateway
       room: string;
       message: string;
       userUrl?: string;
+      replyTo?: { id: string; message: string; username: string } | null;
     },
   ) {
     try {
@@ -278,6 +369,9 @@ export class VideoCallsGateway
       chatData.timestamp = new Date();
       if (data.userUrl) {
         chatData.userUrl = data.userUrl;
+      }
+      if (data.replyTo) {
+        chatData.replyTo = data.replyTo;
       }
       await this.chatsRepository.saveChat(chatData);
       this.server.to(data.room).emit('chat', chatData);
@@ -295,6 +389,7 @@ export class VideoCallsGateway
       room: string;
       message: string;
       userUrl?: string;
+      fileUrl?: string;
     },
   ) {
     try {
@@ -307,6 +402,9 @@ export class VideoCallsGateway
       globalChatData.timestamp = new Date();
       if (data.userUrl) {
         globalChatData.userUrl = data.userUrl;
+      }
+      if (data.fileUrl) {
+        globalChatData.fileUrl = data.fileUrl;
       }
       await this.chatsRepository.saveGlobalChat(globalChatData);
 

@@ -30,6 +30,9 @@ export class Chat {
   @Column({ type: 'varchar', length: 255, nullable: true })
   userUrl?: string;
 
+  @Column({ type: 'jsonb', nullable: true })
+  replyTo?: { id: string; message: string; username: string } | null;
+
   @Column({ default: true })
   unread: boolean;
 

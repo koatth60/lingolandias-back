@@ -32,6 +32,9 @@ export class GlobalChat {
   @Column({ type: 'varchar', length: 255, nullable: true })
   userUrl?: string;
 
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  fileUrl?: string;
+
   @Column({ type: 'varchar', length: 20, nullable: true })
   userRole?: string;
 
