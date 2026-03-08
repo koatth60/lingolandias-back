@@ -296,7 +296,69 @@ export class UsersRepository {
     return await this.usersRepository.find();
   }
 
-  // async saveInUnreadMessagesEnt() {
-  //   return await this.usersRepository.save();
-  // }
+  async getAdminStats(): Promise<{ teacherCount: number; studentCount: number; unassignedCount: number }> {
+    const [teacherCount, studentCount, unassignedCount] = await Promise.all([
+      this.usersRepository.count({ where: { role: 'teacher' } }),
+      this.usersRepository.count({ where: { role: 'user' } }),
+      this.usersRepository
+        .createQueryBuilder('user')
+        .leftJoin('user.teacher', 't')
+        .where('user.role = :role', { role: 'user' })
+        .andWhere('t.id IS NULL')
+        .getCount(),
+    ]);
+    return { teacherCount, studentCount, unassignedCount };
+  }
+
+  async findTeachers(): Promise<User[]> {
+    return this.usersRepository.find({
+      where: { role: 'teacher' },
+      relations: ['students', 'teacherSchedules'],
+    });
+  }
+
+  async findStudentsPaginated(params: {
+    page: number;
+    limit: number;
+    search?: string;
+    language?: string;
+    unassignedOnly?: boolean;
+  }): Promise<{ data: Partial<User>[]; total: number; page: number; totalPages: number }> {
+    const { page = 1, limit = 20, search, language, unassignedOnly } = params;
+
+    const qb = this.usersRepository
+      .createQueryBuilder('user')
+      .select([
+        'user.id',
+        'user.name',
+        'user.lastName',
+        'user.email',
+        'user.language',
+        'user.avatarUrl',
+      ])
+      .where('user.role = :role', { role: 'user' });
+
+    if (unassignedOnly) {
+      qb.leftJoin('user.teacher', 'teacher').andWhere('teacher.id IS NULL');
+    }
+
+    if (search?.trim()) {
+      qb.andWhere(
+        '(LOWER(user.name) LIKE :search OR LOWER(user.lastName) LIKE :search OR LOWER(user.email) LIKE :search)',
+        { search: `%${search.trim().toLowerCase()}%` },
+      );
+    }
+
+    if (language?.trim()) {
+      qb.andWhere('user.language = :language', { language: language.trim() });
+    }
+
+    const [data, total] = await qb
+      .orderBy('user.name', 'ASC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return { data, total, page, totalPages: Math.ceil(total / limit) };
+  }
 }

@@ -8,6 +8,7 @@ import {
   HttpCode,
   Patch,
   Param,
+  Query,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 // import { UpdateUserDto } from './dto/update-user.dto';
@@ -26,6 +27,30 @@ export class UsersController {
   @HttpCode(HttpStatus.OK)
   adminDashboard() {
     return this.usersService.findAdminDashboard();
+  }
+
+  @Get('admin-stats')
+  @HttpCode(HttpStatus.OK)
+  getAdminStats() {
+    return this.usersService.getAdminStats();
+  }
+
+  @Get('teachers')
+  @HttpCode(HttpStatus.OK)
+  findTeachers() {
+    return this.usersService.findTeachers();
+  }
+
+  @Get('students/paginated')
+  @HttpCode(HttpStatus.OK)
+  findStudentsPaginated(@Query() query: any) {
+    return this.usersService.findStudentsPaginated({
+      page: parseInt(query.page) || 1,
+      limit: Math.min(parseInt(query.limit) || 20, 100),
+      search: query.search || '',
+      language: query.language || '',
+      unassignedOnly: query.unassignedOnly === 'true',
+    });
   }
 
   @Get('student-schedules/:studentId')

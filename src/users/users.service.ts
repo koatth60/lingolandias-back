@@ -119,6 +119,24 @@ export class UsersService {
     };
   }
 
+  async getAdminStats() {
+    return this.usersRepository.getAdminStats();
+  }
+
+  async findTeachers() {
+    return this.usersRepository.findTeachers();
+  }
+
+  async findStudentsPaginated(params: {
+    page: number;
+    limit: number;
+    search?: string;
+    language?: string;
+    unassignedOnly?: boolean;
+  }) {
+    return this.usersRepository.findStudentsPaginated(params);
+  }
+
   async addEvent(event: any) {
     const newEvent = {
       ...event,
