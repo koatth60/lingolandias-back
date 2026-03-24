@@ -22,6 +22,11 @@ import { CounterField } from './chat/types';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { User } from './users/entities/user.entity';
+import { JwtService } from '@nestjs/jwt';
+
+const MAX_MESSAGE_LENGTH = 4000;
+const RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
+const RATE_LIMIT_MAX = 20;           // max messages per window
 
 @Injectable({ scope: Scope.DEFAULT })
 @WebSocketGateway({
@@ -41,20 +46,25 @@ export class VideoCallsGateway
   private readonly validLanguages = new Set(['english', 'spanish', 'polish']);
   private readonly uuidRegex =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  private readonly validRoomRegex =
+    /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|uuid-[a-z-]+)$/i;
 
   // socket presence tracking: socketId → userId, userId → Set<socketId>
   private readonly socketToUser = new Map<string, string>();
   private readonly userSockets = new Map<string, Set<string>>();
-  // Grace-period timers: userId → timer. Absorbs page reloads (user reconnects within ~7s → no offline event)
+  // Grace-period timers: userId → timer
   private readonly offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // Room membership: roomId → Set<userId>. Persists even after socket leaves the room.
+  // Room membership: roomId → Set<userId>
   private readonly roomMembers = new Map<string, Set<string>>();
+  // Rate limiting: socketId → { count, resetAt }
+  private readonly rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
   @WebSocketServer() server: Server;
 
   constructor(
     private readonly chatsRepository: ChatsRepository,
     private readonly unreadCounterService: UnreadCounterService,
+    private readonly jwtService: JwtService,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
   ) {}
@@ -65,31 +75,76 @@ export class VideoCallsGateway
     } catch (_) {}
   }
 
-  handleConnection(socket: Socket) {}
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  private verifySocketToken(socket: Socket): boolean {
+    const token =
+      socket.handshake.auth?.token ||
+      socket.handshake.headers?.authorization?.replace('Bearer ', '');
+    if (!token) return false;
+    try {
+      const payload = this.jwtService.verify(token, { secret: process.env.JWT_SECRET });
+      socket.data.userId = payload.sub || payload.id;
+      socket.data.authenticated = true;
+      return true;
+    } catch {
+      socket.data.authenticated = false;
+      return false;
+    }
+  }
+
+  private isAuthenticated(socket: Socket): boolean {
+    return socket.data?.authenticated === true;
+  }
+
+  private isRateLimited(socketId: string): boolean {
+    const now = Date.now();
+    const entry = this.rateLimitMap.get(socketId);
+    if (!entry || now > entry.resetAt) {
+      this.rateLimitMap.set(socketId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+      return false;
+    }
+    entry.count += 1;
+    if (entry.count > RATE_LIMIT_MAX) return true;
+    return false;
+  }
+
+  private sanitizeMessage(text: string): string {
+    if (!text) return '';
+    return text.slice(0, MAX_MESSAGE_LENGTH);
+  }
+
+  private isValidRoom(room: string): boolean {
+    return typeof room === 'string' && this.validRoomRegex.test(room);
+  }
+
+  private isValidUUID(uuid: string): boolean {
+    return typeof uuid === 'string' && this.uuidRegex.test(uuid);
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+  handleConnection(socket: Socket) {
+    this.verifySocketToken(socket);
+  }
 
   async handleDisconnect(socket: Socket) {
     const userId = this.socketToUser.get(socket.id);
     if (!userId) return;
 
+    this.rateLimitMap.delete(socket.id);
     this.socketToUser.delete(socket.id);
     const sockets = this.userSockets.get(userId);
     if (sockets) {
       sockets.delete(socket.id);
       if (sockets.size === 0) {
         this.userSockets.delete(userId);
-        // Grace period: wait 7 s before marking offline.
-        // If the user reloads the page they reconnect within ~1–2 s and the
-        // timer is cancelled, so no spurious offline/online pair is emitted.
         const timer = setTimeout(async () => {
           this.offlineTimers.delete(userId);
-          // Only mark offline if the user has not reconnected
           if (!this.userSockets.has(userId)) {
-            // Clean up room memberships for this user
             for (const [room, members] of this.roomMembers.entries()) {
               members.delete(userId);
-              if (members.size === 0) {
-                this.roomMembers.delete(room);
-              }
+              if (members.size === 0) this.roomMembers.delete(room);
             }
             try {
               const user = await this.userRepo.findOne({ where: { id: userId } });
@@ -97,9 +152,7 @@ export class VideoCallsGateway
                 user.online = 'offline';
                 await this.userRepo.save(user);
                 this.server.emit('userStatus', {
-                  id: user.id,
-                  online: 'offline',
-                  name: user.name + ' ' + user.lastName,
+                  id: user.id, online: 'offline', name: user.name + ' ' + user.lastName,
                 });
               }
             } catch (_) {}
@@ -115,8 +168,11 @@ export class VideoCallsGateway
     const { userId } = data;
     if (!userId) return;
 
-    // Cancel pending offline timer (user reconnected before grace period expired — page reload)
-    // Track whether we cancelled so we know not to re-emit "online" (no "offline" was sent)
+    // Re-verify token here in case handshake token wasn't provided (legacy clients)
+    if (!this.isAuthenticated(socket)) {
+      this.verifySocketToken(socket);
+    }
+
     let suppressOnline = false;
     if (this.offlineTimers.has(userId)) {
       clearTimeout(this.offlineTimers.get(userId));
@@ -132,7 +188,6 @@ export class VideoCallsGateway
     }
     this.userSockets.get(userId).add(socket.id);
 
-    // Only broadcast "online" if this is genuinely a fresh connection (not a reload recovery)
     if (isFirstSocket && !suppressOnline) {
       try {
         const user = await this.userRepo.findOne({ where: { id: userId } });
@@ -140,9 +195,7 @@ export class VideoCallsGateway
           user.online = 'online';
           await this.userRepo.save(user);
           this.server.emit('userStatus', {
-            id: user.id,
-            online: 'online',
-            name: user.name + ' ' + user.lastName,
+            id: user.id, online: 'online', name: user.name + ' ' + user.lastName,
           });
         }
       } catch (_) {}
@@ -150,38 +203,27 @@ export class VideoCallsGateway
   }
 
   notifyUserOnline(user: any) {
-    const { id, name } = user;
-    this.server.emit('userStatus', { id: id, online: 'online', name: name });
+    this.server.emit('userStatus', { id: user.id, online: 'online', name: user.name });
   }
 
   notifyUserOffline(user: any) {
-    const { id, name } = user;
-    this.server.emit('userStatus', { id: id, online: 'offline', name: name });
+    this.server.emit('userStatus', { id: user.id, online: 'offline', name: user.name });
   }
 
   notifyScheduleUpdated(payload: {
-    studentId: string;
-    action: 'add' | 'remove' | 'modify';
-    schedule?: any;
-    eventIds?: string[];
+    studentId: string; action: 'add' | 'remove' | 'modify'; schedule?: any; eventIds?: string[];
   }) {
     this.server.emit('scheduleUpdated', payload);
   }
 
   notifyStudentAssigned(payload: {
-    teacherId: string;
-    studentId: string;
-    schedules: any[];
-    student: any;
-    teacher: any;
+    teacherId: string; studentId: string; schedules: any[]; student: any; teacher: any;
   }) {
     this.server.emit('studentAssigned', payload);
   }
 
   notifyStudentRemoved(payload: {
-    teacherId: string;
-    studentIds: string[];
-    deletedScheduleIds: string[];
+    teacherId: string; studentIds: string[]; deletedScheduleIds: string[];
   }) {
     this.server.emit('studentRemoved', payload);
   }
@@ -189,7 +231,8 @@ export class VideoCallsGateway
   @SubscribeMessage('join')
   handleJoinRoom(socket: Socket, data: { username: string; room: string }) {
     try {
-      // Track user as a member of this room (persists after they leave the socket.io room)
+      if (!this.isValidRoom(data.room)) return;
+
       const userId = this.socketToUser.get(socket.id);
       if (userId) {
         if (!this.roomMembers.has(data.room)) {
@@ -198,21 +241,12 @@ export class VideoCallsGateway
         this.roomMembers.get(data.room).add(userId);
       }
 
-      // Dejar todas las habitaciones excepto la predeterminada (propia del socket)
-      const rooms = Array.from(socket.rooms); // Obtén todas las salas a las que pertenece el socket
-      rooms.forEach((room) => {
-        if (room !== socket.id) {
-          socket.leave(room); // Abandona cualquier sala que no sea la propia
-        }
-      });
+      const rooms = Array.from(socket.rooms);
+      rooms.forEach((room) => { if (room !== socket.id) socket.leave(room); });
 
-      // Unirse a la nueva sala
       socket.join(data.room);
-
-      // Notificar a los usuarios de la nueva sala
       socket.broadcast.to(data.room).emit('ready', { username: data.username });
-    } catch (err) {
-    }
+    } catch (_) {}
   }
 
   @SubscribeMessage('data')
@@ -220,23 +254,28 @@ export class VideoCallsGateway
     const { type, room } = data;
     if (['offer', 'answer', 'candidate'].includes(type)) {
       socket.broadcast.to(room).emit('data', data);
-    } else {
     }
   }
 
   @SubscribeMessage('typing')
   handleTyping(socket: Socket, data: { room: string; username: string }) {
+    if (!this.isValidRoom(data.room)) return;
     socket.broadcast.to(data.room).emit('typing', { username: data.username });
   }
 
   @SubscribeMessage('stopTyping')
   handleStopTyping(socket: Socket, data: { room: string }) {
+    if (!this.isValidRoom(data.room)) return;
     socket.broadcast.to(data.room).emit('stopTyping', {});
   }
 
   @SubscribeMessage('getRoomMembers')
   async handleGetRoomMembers(socket: Socket, data: { room: string }) {
     try {
+      if (!this.isValidRoom(data.room)) {
+        socket.emit('roomMembers', { room: data.room, members: [] });
+        return;
+      }
       const socketIds = this.server.sockets.adapter.rooms.get(data.room);
       if (!socketIds) {
         socket.emit('roomMembers', { room: data.room, members: [] });
@@ -267,9 +306,13 @@ export class VideoCallsGateway
     data: { messageId: string; room: string; newMessage: string },
   ) {
     try {
-      await this.chatsRepository.editNormalChat(data.messageId, data.newMessage);
-      this.server.to(data.room).emit('normalChatEdited', { messageId: data.messageId, newMessage: data.newMessage });
-    } catch (err) {}
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.room)) return;
+      const safe = this.sanitizeMessage(data.newMessage);
+      if (!safe.trim()) return;
+      await this.chatsRepository.editNormalChat(data.messageId, safe);
+      this.server.to(data.room).emit('normalChatEdited', { messageId: data.messageId, newMessage: safe });
+    } catch (_) {}
   }
 
   @SubscribeMessage('editGlobalChat')
@@ -278,28 +321,30 @@ export class VideoCallsGateway
     data: { messageId: string; room: string; newMessage: string },
   ) {
     try {
-      await this.chatsRepository.editGlobalChat(data.messageId, data.newMessage);
-      this.server.to(data.room).emit('globalChatEdited', { messageId: data.messageId, newMessage: data.newMessage });
-    } catch (err) {}
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.room)) return;
+      const safe = this.sanitizeMessage(data.newMessage);
+      if (!safe.trim()) return;
+      await this.chatsRepository.editGlobalChat(data.messageId, safe);
+      this.server.to(data.room).emit('globalChatEdited', { messageId: data.messageId, newMessage: safe });
+    } catch (_) {}
   }
 
   @SubscribeMessage('clearNormalChat')
-  async handleClearNormalChat(
-    socket: Socket,
-    data: { room: string },
-  ) {
+  async handleClearNormalChat(socket: Socket, data: { room: string }) {
     try {
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidRoom(data.room)) return;
       await this.chatsRepository.deleteChatsByRoom(data.room);
       this.server.to(data.room).emit('normalChatCleared', { room: data.room });
-    } catch (err) {}
+    } catch (_) {}
   }
 
   @SubscribeMessage('notifyRead')
   handleNotifyRead(socket: Socket, data: { room: string }) {
-    // Notify sockets currently in the room
+    if (!this.isValidRoom(data.room)) return;
     socket.broadcast.to(data.room).emit('chatMessagesRead', { room: data.room });
 
-    // Also notify all known room members directly (covers chat-list view where they left the room)
     const members = this.roomMembers.get(data.room);
     if (members) {
       for (const memberId of members) {
@@ -316,38 +361,23 @@ export class VideoCallsGateway
   }
 
   @SubscribeMessage('deleteGlobalChat')
-  async handleDeleteGlobalChat(
-    socket: Socket,
-    data: { messageId: string; room: string },
-  ) {
+  async handleDeleteGlobalChat(socket: Socket, data: { messageId: string; room: string }) {
     try {
-      // Call repository to delete message
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.room)) return;
       await this.chatsRepository.deleteGlobalChat(data.messageId);
-
-
-      // Notify all users in the room that the message has been deleted
-      this.server
-        .to(data.room)
-        .emit('globalChatDeleted', { messageId: data.messageId });
-    } catch (err) {
-    }
+      this.server.to(data.room).emit('globalChatDeleted', { messageId: data.messageId });
+    } catch (_) {}
   }
 
   @SubscribeMessage('deleteNormalChat')
-  async handleDeleteNormalChat(
-    socket: Socket,
-    data: { messageId: string; room: string },
-  ) {
+  async handleDeleteNormalChat(socket: Socket, data: { messageId: string; room: string }) {
     try {
-      // Call repository to delete message
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.room)) return;
       await this.chatsRepository.deleteNormalChat(data.messageId);
-
-
-      this.server
-        .to(data.room)
-        .emit('normalChatDeleted', { messageId: data.messageId });
-    } catch (err) {
-    }
+      this.server.to(data.room).emit('normalChatDeleted', { messageId: data.messageId });
+    } catch (_) {}
   }
 
   @SubscribeMessage('chat')
@@ -363,23 +393,32 @@ export class VideoCallsGateway
     },
   ) {
     try {
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidRoom(data.room)) return;
+      if (this.isRateLimited(socket.id)) return;
+
+      const safe = this.sanitizeMessage(data.message);
+
       const chatData = new Chat();
-      chatData.username = data.username;
-      chatData.email = data.email;
+      chatData.username = data.username?.slice(0, 100) || 'User';
+      chatData.email = data.email?.slice(0, 200) || '';
       chatData.room = data.room;
-      chatData.message = data.message;
+      chatData.message = safe;
       chatData.timestamp = new Date();
-      if (data.userUrl) {
-        chatData.userUrl = data.userUrl;
-      }
-      if (data.replyTo) {
-        chatData.replyTo = data.replyTo;
-      }
+      if (data.userUrl) chatData.userUrl = data.userUrl;
+      if (data.replyTo) chatData.replyTo = data.replyTo;
+
       await this.chatsRepository.saveChat(chatData);
       this.server.to(data.room).emit('chat', chatData);
-      socket.broadcast.emit('newChat', { room: data.room });
-    } catch (err) {
-    }
+
+      // Include preview in broadcast so chat list can show last message
+      const preview = safe.startsWith('http') ? '📎 File' : safe.slice(0, 80);
+      socket.broadcast.emit('newChat', {
+        room: data.room,
+        preview,
+        sender: chatData.username,
+      });
+    } catch (_) {}
   }
 
   @SubscribeMessage('globalChat')
@@ -395,26 +434,24 @@ export class VideoCallsGateway
     },
   ) {
     try {
-      // Create and save the global chat message
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidRoom(data.room)) return;
+      if (this.isRateLimited(socket.id)) return;
+
+      const safe = this.sanitizeMessage(data.message);
+
       const globalChatData = new GlobalChat();
-      globalChatData.username = data.username;
-      globalChatData.email = data.email;
+      globalChatData.username = data.username?.slice(0, 100) || 'User';
+      globalChatData.email = data.email?.slice(0, 200) || '';
       globalChatData.room = data.room;
-      globalChatData.message = data.message;
+      globalChatData.message = safe;
       globalChatData.timestamp = new Date();
-      if (data.userUrl) {
-        globalChatData.userUrl = data.userUrl;
-      }
-      if (data.fileUrl) {
-        globalChatData.fileUrl = data.fileUrl;
-      }
+      if (data.userUrl) globalChatData.userUrl = data.userUrl;
+      if (data.fileUrl) globalChatData.fileUrl = data.fileUrl;
+
       await this.chatsRepository.saveGlobalChat(globalChatData);
 
-      // 2. Actualizar contadores usando estrategias
-      const strategy = this.counterStrategies.find((s) =>
-        s.roomPattern.test(data.room),
-      );
-
+      const strategy = this.counterStrategies.find((s) => s.roomPattern.test(data.room));
       if (strategy) {
         const counterField = this.getCounterField(data.room);
         await this.unreadCounterService.bulkIncrementCounter(
@@ -423,11 +460,17 @@ export class VideoCallsGateway
           data.email,
         );
       }
-      // Emitir eventos
+
       this.server.to(data.room).emit('globalChat', globalChatData);
-      socket.broadcast.emit('newUnreadGlobalMessage', { room: data.room });
-    } catch (err) {
-    }
+
+      // Include preview in broadcast so chat list can show last message
+      const preview = data.fileUrl ? '📎 File' : safe.slice(0, 80);
+      socket.broadcast.emit('newUnreadGlobalMessage', {
+        room: data.room,
+        preview,
+        sender: globalChatData.username,
+      });
+    } catch (_) {}
   }
 
   @SubscribeMessage('supportChat')
@@ -443,14 +486,20 @@ export class VideoCallsGateway
     },
   ) {
     try {
+      if (!this.isAuthenticated(socket)) return;
+      if (this.isRateLimited(socket.id)) return;
+
+      const safe = this.sanitizeMessage(data.message);
+
       const globalChatData = new GlobalChat();
-      globalChatData.username = data.username;
-      globalChatData.email = data.email;
+      globalChatData.username = data.username?.slice(0, 100) || 'User';
+      globalChatData.email = data.email?.slice(0, 200) || '';
       globalChatData.room = 'uuid-support';
-      globalChatData.message = data.message;
+      globalChatData.message = safe;
       globalChatData.timestamp = new Date();
       if (data.userRole) globalChatData.userRole = data.userRole;
       if (data.userUrl) globalChatData.userUrl = data.userUrl;
+
       await this.chatsRepository.saveGlobalChat(globalChatData);
 
       await this.unreadCounterService.bulkIncrementCounter(
@@ -461,18 +510,17 @@ export class VideoCallsGateway
 
       this.server.to('uuid-support').emit('supportChat', globalChatData);
       socket.broadcast.emit('newUnreadSupportMessage', { room: 'uuid-support' });
-    } catch (err) {}
+    } catch (_) {}
   }
 
   @SubscribeMessage('deleteSupportChat')
-  async handleDeleteSupportChat(
-    socket: Socket,
-    data: { messageId: string },
-  ) {
+  async handleDeleteSupportChat(socket: Socket, data: { messageId: string }) {
     try {
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidUUID(data.messageId)) return;
       await this.chatsRepository.deleteGlobalChat(data.messageId);
       this.server.to('uuid-support').emit('supportChatDeleted', { messageId: data.messageId });
-    } catch (err) {}
+    } catch (_) {}
   }
 
   private getCounterField(room: string): CounterField {
@@ -490,29 +538,5 @@ export class VideoCallsGateway
 
   private capitalize(str: string): string {
     return str.charAt(0).toUpperCase() + str.slice(1);
-  }
-
-  private parseId(input: string): {
-    id?: string;
-    role?: string;
-    language?: string;
-  } {
-    if (this.isValidUUID(input)) {
-      return { id: input };
-    }
-    if (input.startsWith('uuid-')) {
-      const suffix = input.slice(5);
-      const parts = suffix.split('-');
-      if (parts.length === 1) {
-        return { language: parts[0] };
-      }
-      if (parts.length === 2) {
-        return { role: parts[0], language: parts[1] };
-      }
-    }
-  }
-
-  private isValidUUID(uuid: string): boolean {
-    return this.uuidRegex.test(uuid);
   }
 }

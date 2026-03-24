@@ -16,8 +16,7 @@ import { SettingsModule } from './settings/settings.module';
 import { TrelloModule } from './trello/trello.module';
 import { PushModule } from './push/push.module';
 import { ClassSessionsModule } from './class-sessions/class-sessions.module';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
 
 @Module({
   imports: [
@@ -54,12 +53,6 @@ import { APP_GUARD } from '@nestjs/core';
     ClassSessionsModule,
   ],
   controllers: [AppController],
-  providers: [
-    AppService,
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerGuard,
-    },
-  ],
+  providers: [AppService],
 })
 export class AppModule {}
