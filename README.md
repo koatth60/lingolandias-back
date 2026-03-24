@@ -1,73 +1,106 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
-</p>
+# Lingolandias Academy — Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+REST API and WebSocket server powering [lingolandias.com](https://lingolandias.com) — a live language learning platform with 500+ active users, one-on-one class management, and real-time chat.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
+## Overview
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Lingolandias Academy supports three user roles: **Admin**, **Teacher**, and **Student**. The backend handles authentication, role-based access control, class management, and real-time communication via WebSockets.
 
-## Installation
+---
 
-```bash
-$ npm install
-```
+## Features
 
-## Running the app
+- **Role-based authentication** — JWT with three roles: admin, teacher, student
+- **Class management** — admins assign one-on-one sessions to students and teachers via calendar
+- **Real-time chat** — Socket.IO gateway for live in-class messaging
+- **Admin panel API** — full user and platform management
+- **Production deployment** — live and actively maintained at lingolandias.com
 
-```bash
-# development
-$ npm run start
+---
 
-# watch mode
-$ npm run start:dev
+## Tech Stack
 
-# production mode
-$ npm run start:prod
-```
+| Layer | Technology |
+|---|---|
+| Framework | NestJS |
+| Language | TypeScript |
+| Database | PostgreSQL |
+| Real-time | Socket.IO |
+| Auth | JWT |
+| ORM | TypeORM |
 
-## Test
+---
+
+## Getting Started
+
+### Prerequisites
+- Node.js 18+
+- PostgreSQL 14+
+- npm
+
+### Installation
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+git clone https://github.com/koatth60/lingolandias-back.git
+cd lingolandias-back
+npm install
+# Create a .env file with your own environment variables
+npm run start:dev
 ```
 
-## Support
+---
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+## API Overview
 
-## Stay in touch
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/auth/register` | Register as student or teacher |
+| POST | `/auth/login` | Login and receive JWT |
+| GET | `/classes` | List assigned classes |
+| POST | `/classes` | Create and assign a class (admin) |
+| GET | `/users` | List users (admin) |
+| GET | `/users/:id` | Get user profile |
 
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+---
+
+## WebSocket Events
+
+| Event | Direction | Description |
+|---|---|---|
+| `join_room` | Client → Server | Join a class chat room |
+| `message` | Client → Server | Send a message |
+| `message` | Server → Client | Receive a message |
+| `user_joined` | Server → Client | User joined notification |
+
+---
+
+## Project Structure
+
+```
+src/
+├── auth/             # JWT authentication and guards
+├── classes/          # Class management
+├── chat/             # Socket.IO real-time chat gateway
+├── users/            # User profiles (student, teacher, admin)
+└── common/           # Shared pipes, guards, and utilities
+```
+
+---
+
+## Live App
+
+[lingolandias.com](https://lingolandias.com)
+
+---
+
+## Related
+
+- [lingolandias-front](https://github.com/koatth60/lingolandias-front) — React frontend
+
+---
 
 ## License
 
-Nest is [MIT licensed](LICENSE).
+All rights reserved. This source code is publicly visible for portfolio purposes only and may not be used, copied, or distributed without explicit permission from the author.
