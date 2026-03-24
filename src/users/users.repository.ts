@@ -87,7 +87,7 @@ export class UsersRepository {
   // Lean query for admin dashboard: users without heavy relations + all schedules
   async findAdminDashboard(): Promise<{ users: User[]; schedules: Schedule[] }> {
     const [users, schedules] = await Promise.all([
-      this.usersRepository.find({ relations: ['settings'] }),
+      this.usersRepository.find({ relations: ['settings', 'teacher'] }),
       this.scheduleRepository.find(),
     ]);
     return { users, schedules };
@@ -315,6 +315,56 @@ export class UsersRepository {
       where: { role: 'teacher' },
       relations: ['students', 'teacherSchedules'],
     });
+  }
+
+  async getAnalytics(): Promise<any> {
+    const [studentsPerTeacher, languageDistribution, schedulesPerTeacher] = await Promise.all([
+      // Students count per teacher
+      this.usersRepository
+        .createQueryBuilder('teacher')
+        .select(['teacher.id', 'teacher.name', 'teacher.lastName'])
+        .addSelect('COUNT(student.id)', 'studentCount')
+        .leftJoin('teacher.students', 'student')
+        .where('teacher.role = :role', { role: 'teacher' })
+        .groupBy('teacher.id')
+        .addGroupBy('teacher.name')
+        .addGroupBy('teacher.lastName')
+        .orderBy('"studentCount"', 'DESC')
+        .getRawMany(),
+
+      // Students by language
+      this.usersRepository
+        .createQueryBuilder('user')
+        .select('user.language', 'language')
+        .addSelect('COUNT(*)', 'count')
+        .where('user.role = :role', { role: 'user' })
+        .groupBy('user.language')
+        .getRawMany(),
+
+      // Schedule slots per teacher
+      this.scheduleRepository
+        .createQueryBuilder('schedule')
+        .select('schedule.teacherName', 'teacherName')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy('schedule.teacherName')
+        .orderBy('"count"', 'DESC')
+        .getRawMany(),
+    ]);
+
+    return {
+      studentsPerTeacher: studentsPerTeacher.map((r) => ({
+        name: `${r.teacher_name} ${r.teacher_lastName}`,
+        count: parseInt(r.studentCount, 10),
+      })),
+      languageDistribution: languageDistribution.map((r) => ({
+        language: r.language || 'unknown',
+        count: parseInt(r.count, 10),
+      })),
+      schedulesPerTeacher: schedulesPerTeacher.map((r) => ({
+        name: r.teacherName || 'Unknown',
+        count: parseInt(r.count, 10),
+      })),
+    };
   }
 
   async findStudentsPaginated(params: {

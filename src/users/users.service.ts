@@ -123,6 +123,10 @@ export class UsersService {
     return this.usersRepository.getAdminStats();
   }
 
+  async getAnalytics() {
+    return this.usersRepository.getAnalytics();
+  }
+
   async findTeachers() {
     return this.usersRepository.findTeachers();
   }
