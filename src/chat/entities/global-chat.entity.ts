@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 // import { UnreadGlobalMessage } from './unread-global-messages.entity';
 
+@Index(['room', 'timestamp'])
 @Entity('global-chats')
 export class GlobalChat {
   @PrimaryGeneratedColumn('uuid')

@@ -6,6 +6,7 @@ import {
   Index,
 } from 'typeorm';
 
+@Index(['room', 'timestamp'])
 @Entity('chats')
 export class Chat {
   @PrimaryGeneratedColumn('uuid')
@@ -14,6 +15,7 @@ export class Chat {
   @Column({ type: 'varchar', length: 100 })
   username: string;
 
+  @Index()
   @Column({ type: 'varchar', length: 100 })
   email: string;
 

@@ -4,6 +4,7 @@ import {
   ManyToOne,
   JoinColumn,
   Column,
+  Index,
 } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 // import { GlobalChat } from './global-chat.entity';
@@ -19,6 +20,7 @@ export class UnreadGlobalMessage {
   // @JoinColumn({ name: 'messageId' })
   // message: GlobalChat;
 
+  @Index()
   @ManyToOne(() => User, { nullable: false })
   @JoinColumn({ name: 'userId' })
   user: User;

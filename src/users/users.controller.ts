@@ -9,10 +9,13 @@ import {
   Patch,
   Param,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
+import { AuthGuard } from '../auth/guards/auth.guard';
 // import { UpdateUserDto } from './dto/update-user.dto';
 
+@UseGuards(AuthGuard)
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
@@ -33,6 +36,12 @@ export class UsersController {
   @HttpCode(HttpStatus.OK)
   getAdminStats() {
     return this.usersService.getAdminStats();
+  }
+
+  @Get('analytics')
+  @HttpCode(HttpStatus.OK)
+  getAnalytics() {
+    return this.usersService.getAnalytics();
   }
 
   @Get('teachers')

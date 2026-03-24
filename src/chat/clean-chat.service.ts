@@ -20,17 +20,15 @@ export class ChatCleanupService {
     const oneMonthAgo = new Date();
     oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
 
-    // Fetch messages older than 1 month
-    const oldMessages = await this.chatRepository.find({
-      where: { timestamp: LessThan(oneMonthAgo) },
-    });
-
-    // Insert old messages into the archive table
-    const archivedMessages = oldMessages.map((message) => ({
-      ...message,
-      archivedAt: new Date(),
-    }));
-    await this.archivedChatRepository.save(archivedMessages);
+    // Bulk INSERT ... SELECT directly in the database — no memory allocation for rows
+    await this.chatRepository.manager.query(
+      `INSERT INTO archived_chats (id, username, email, room, message, timestamp, "archivedAt")
+       SELECT id, username, email, room, message, timestamp, NOW()
+       FROM chats
+       WHERE timestamp < $1
+       ON CONFLICT (id) DO NOTHING`,
+      [oneMonthAgo],
+    );
 
     // Delete archived messages from the main chat table
     await this.chatRepository.delete({

@@ -7,12 +7,15 @@ import {
   Patch,
   Query,
   BadRequestException,
+  UseGuards,
 } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { DeleteUnreadDto } from './dtos/delete-unread-dto';
 import { ReadChatDto } from './dtos/read-chat-dto';
 import { GetArchivedChatsDto } from './dtos/get-archived-chats.dto';
+import { AuthGuard } from '../auth/guards/auth.guard';
 
+@UseGuards(AuthGuard)
 @Controller('chat')
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}

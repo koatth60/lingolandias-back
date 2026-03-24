@@ -20,7 +20,7 @@ import {
 import { UnreadCounterService } from './chat/unread-counter.service';
 import { CounterField } from './chat/types';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { User } from './users/entities/user.entity';
 
 @Injectable({ scope: Scope.DEFAULT })
@@ -84,6 +84,13 @@ export class VideoCallsGateway
           this.offlineTimers.delete(userId);
           // Only mark offline if the user has not reconnected
           if (!this.userSockets.has(userId)) {
+            // Clean up room memberships for this user
+            for (const [room, members] of this.roomMembers.entries()) {
+              members.delete(userId);
+              if (members.size === 0) {
+                this.roomMembers.delete(room);
+              }
+            }
             try {
               const user = await this.userRepo.findOne({ where: { id: userId } });
               if (user) {
@@ -240,21 +247,16 @@ export class VideoCallsGateway
         const uid = this.socketToUser.get(sid);
         if (uid) userIds.add(uid);
       });
-      const members: { id: string; name: string; language: string; avatarUrl?: string }[] = [];
-      for (const uid of userIds) {
-        const user = await this.userRepo.findOne({
-          where: { id: uid },
-          select: ['id', 'name', 'lastName', 'language', 'avatarUrl'] as any,
-        });
-        if (user) {
-          members.push({
-            id: uid,
-            name: (user as any).name,
-            language: (user as any).language || 'english',
-            avatarUrl: (user as any).avatarUrl,
-          });
-        }
-      }
+      const users = await this.userRepo.find({
+        where: { id: In([...userIds]) },
+        select: ['id', 'name', 'lastName', 'language', 'avatarUrl'] as any,
+      });
+      const members = users.map((user) => ({
+        id: (user as any).id,
+        name: (user as any).name,
+        language: (user as any).language || 'english',
+        avatarUrl: (user as any).avatarUrl,
+      }));
       socket.emit('roomMembers', { room: data.room, members });
     } catch (_) {}
   }

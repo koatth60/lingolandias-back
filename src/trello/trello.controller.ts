@@ -9,9 +9,12 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  UseGuards,
 } from '@nestjs/common';
 import { TrelloService } from './trello.service';
+import { AuthGuard } from '../auth/guards/auth.guard';
 
+@UseGuards(AuthGuard)
 @Controller('trello')
 export class TrelloController {
   constructor(private readonly trelloService: TrelloService) {}
