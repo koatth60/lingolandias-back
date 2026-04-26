@@ -264,6 +264,32 @@ export class ChatsRepository {
       unreadCounts[row.room] = parseInt(row.count, 10);
     }
 
+    // Fallback: for rooms with no active messages, check archived_chats
+    // so the chat list shows the last known message instead of 'No messages yet'
+    const missingRooms = rooms.filter((r) => !lastMessages[r]);
+    if (missingRooms.length > 0) {
+      const archivedRows = await this.archivedChatRepository
+        .createQueryBuilder('archived')
+        .select(['archived.room', 'archived.message', 'archived.email', 'archived.timestamp'])
+        .distinctOn(['archived.room'])
+        .where('archived.room IN (:...missingRooms)', { missingRooms })
+        .orderBy('archived.room')
+        .addOrderBy('archived.timestamp', 'DESC')
+        .getMany();
+
+      for (const row of archivedRows) {
+        const isFile = row.message?.startsWith('http') ?? false;
+        lastMessages[row.room] = {
+          content: row.message,
+          timestamp: row.timestamp,
+          type: isFile ? 'file' : 'text',
+          sender: row.email,
+          unread: false,
+          isFile,
+        };
+      }
+    }
+
     return { lastMessages, unreadCounts };
   }
 
