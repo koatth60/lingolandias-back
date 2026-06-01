@@ -16,4 +16,8 @@ export class UpdateSettingsDto {
   @IsBoolean()
   @IsOptional()
   classReminders?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  watchedTutorial?: boolean;
 }

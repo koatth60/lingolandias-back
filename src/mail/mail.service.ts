@@ -83,6 +83,47 @@ export class MailService {
     }
   }
 
+  public async sendContactEmail(data: {
+    name: string;
+    number?: string;
+    email: string;
+    message: string;
+  }) {
+    try {
+      await this.mailerService.sendMail({
+        to: 'agata@lingolandias.net',
+        replyTo: data.email,
+        subject: `New Contact Message from ${data.name}`,
+        template: './contact',
+        context: {
+          name: data.name,
+          number: data.number || '—',
+          email: data.email,
+          message: data.message,
+        },
+      });
+      this.logger.log(`Contact email sent from ${data.email}`);
+    } catch (error) {
+      this.logger.error(`Failed to send contact email from ${data.email}`, error.stack);
+      throw new InternalServerErrorException('Failed to send contact email');
+    }
+  }
+
+  public async sendNewsletterEmail(email: string) {
+    try {
+      await this.mailerService.sendMail({
+        to: 'agata@lingolandias.net',
+        subject: `New Newsletter Subscriber: ${email}`,
+        template: './newsletter',
+        context: { email },
+      });
+      this.logger.log(`Newsletter subscription received from ${email}`);
+    } catch (error) {
+      this.logger.error(`Failed to send newsletter notification for ${email}`, error.stack);
+      throw new InternalServerErrorException('Failed to process newsletter subscription');
+    }
+  }
+
   public async sendSupportEmail(data: {
     name: string;
     lastName: string;

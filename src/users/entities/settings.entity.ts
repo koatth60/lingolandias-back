@@ -24,6 +24,9 @@ export class Settings {
   @Column({ type: 'boolean', default: false })
   classReminders: boolean;
 
+  @Column({ type: 'boolean', default: false })
+  watchedTutorial: boolean;
+
   @OneToOne(() => User, (user) => user.settings, {
   onDelete: 'CASCADE'  
 })
