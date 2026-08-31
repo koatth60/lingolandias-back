@@ -410,4 +410,54 @@ export class UsersRepository {
 
     return { data, total, page, totalPages: Math.ceil(total / limit) };
   }
+
+  // Teams-style "search anyone" — open across all roles, unlike
+  // findStudentsPaginated which is scoped to students only.
+  async searchUsers(params: {
+    query: string;
+    excludeUserId?: string;
+    limit?: number;
+  }): Promise<Partial<User>[]> {
+    const { query, excludeUserId, limit = 20 } = params;
+    if (!query?.trim()) return [];
+
+    const qb = this.usersRepository
+      .createQueryBuilder('user')
+      .select([
+        'user.id',
+        'user.name',
+        'user.lastName',
+        'user.email',
+        'user.role',
+        'user.avatarUrl',
+        'user.online',
+      ])
+      .where(
+        '(LOWER(user.name) LIKE :search OR LOWER(user.lastName) LIKE :search OR LOWER(user.email) LIKE :search)',
+        { search: `%${query.trim().toLowerCase()}%` },
+      );
+
+    if (excludeUserId) {
+      qb.andWhere('user.id != :excludeUserId', { excludeUserId });
+    }
+
+    return qb.orderBy('user.name', 'ASC').take(limit).getMany();
+  }
+
+  async getPublicProfile(id: string): Promise<Partial<User> | null> {
+    return this.usersRepository.findOne({
+      where: { id },
+      select: [
+        'id',
+        'name',
+        'lastName',
+        'email',
+        'role',
+        'avatarUrl',
+        'online',
+        'biography',
+        'language',
+      ],
+    });
+  }
 }

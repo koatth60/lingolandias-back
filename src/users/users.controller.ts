@@ -62,6 +62,22 @@ export class UsersController {
     });
   }
 
+  @Get('search')
+  @HttpCode(HttpStatus.OK)
+  searchUsers(@Query() query: any) {
+    return this.usersService.searchUsers({
+      query: query.q || '',
+      excludeUserId: query.excludeUserId || undefined,
+      limit: Math.min(parseInt(query.limit) || 20, 50),
+    });
+  }
+
+  @Get(':id/public-profile')
+  @HttpCode(HttpStatus.OK)
+  getPublicProfile(@Param('id') id: string) {
+    return this.usersService.getPublicProfile(id);
+  }
+
   @Get('student-schedules/:studentId')
   @HttpCode(HttpStatus.OK)
   getStudentSchedules(@Param('studentId') studentId: string) {

@@ -141,6 +141,18 @@ export class UsersService {
     return this.usersRepository.findStudentsPaginated(params);
   }
 
+  async searchUsers(params: {
+    query: string;
+    excludeUserId?: string;
+    limit?: number;
+  }) {
+    return this.usersRepository.searchUsers(params);
+  }
+
+  async getPublicProfile(id: string) {
+    return this.usersRepository.getPublicProfile(id);
+  }
+
   async addEvent(event: any) {
     const newEvent = {
       ...event,

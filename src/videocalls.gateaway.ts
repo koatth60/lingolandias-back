@@ -23,6 +23,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { User } from './users/entities/user.entity';
 import { JwtService } from '@nestjs/jwt';
+import { ConversationsRepository } from './conversations/conversations.repository';
 
 const MAX_MESSAGE_LENGTH = 4000;
 const RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
@@ -69,6 +70,7 @@ export class VideoCallsGateway
     private readonly jwtService: JwtService,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    private readonly conversationsRepository: ConversationsRepository,
   ) {}
 
   async onModuleInit() {
@@ -562,6 +564,135 @@ export class VideoCallsGateway
       if (!this.isValidUUID(data.messageId)) return;
       await this.chatsRepository.deleteGlobalChat(data.messageId);
       this.server.to('uuid-support').emit('supportChatDeleted', { messageId: data.messageId });
+    } catch (_) {}
+  }
+
+  // ── Unified conversation model (Teams-style overhaul) ───────────────────
+  // Reuses the existing 'join'/'typing'/'stopTyping' handlers above as-is —
+  // they already operate on any validated room string, and a conversation id
+  // (whether a legacy fixed string or a freshly generated UUID) passes the
+  // same isValidRoom() check. Only sending/editing/deleting messages needs
+  // new handlers, since those write to the new `messages` table instead of
+  // `chats`/`global-chats`.
+
+  private emitToUsers(userIds: string[], event: string, payload: any) {
+    for (const userId of userIds) {
+      const socketIds = this.userSockets.get(userId);
+      if (!socketIds) continue;
+      for (const socketId of socketIds) {
+        this.server.to(socketId).emit(event, payload);
+      }
+    }
+  }
+
+  @SubscribeMessage('sendConversationMessage')
+  async handleSendConversationMessage(
+    socket: Socket,
+    data: {
+      conversationId: string;
+      senderId: string;
+      username: string;
+      email: string;
+      avatarUrl?: string;
+      message: string;
+      fileUrl?: string;
+      userUrl?: string;
+      userRole?: string;
+      replyTo?: { id: string; message: string; username: string } | null;
+    },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) {
+        socket.emit('chatError', { reason: 'not_authenticated' });
+        return;
+      }
+      if (!this.isValidRoom(data.conversationId)) return;
+      if (this.isRateLimited(socket.id)) {
+        socket.emit('chatError', { reason: 'rate_limited' });
+        return;
+      }
+      const isMember = await this.conversationsRepository.isMember(data.conversationId, data.senderId);
+      if (!isMember) {
+        socket.emit('chatError', { reason: 'not_a_member' });
+        return;
+      }
+
+      const safe = this.sanitizeMessage(data.message);
+      const saved = await this.conversationsRepository.saveMessage({
+        conversationId: data.conversationId,
+        senderId: data.senderId,
+        username: data.username?.slice(0, 100) || 'User',
+        email: data.email?.slice(0, 200) || '',
+        avatarUrl: data.avatarUrl,
+        message: safe,
+        fileUrl: data.fileUrl,
+        userUrl: data.userUrl,
+        userRole: data.userRole,
+        replyTo: data.replyTo || null,
+        timestamp: new Date(),
+      });
+
+      this.server.to(data.conversationId).emit('conversationMessage', saved);
+
+      // Notify every member's personal sockets (not just those with the room
+      // open) so their conversation list preview/unread badge updates live.
+      const memberIds = await this.conversationsRepository.getMemberIds(data.conversationId);
+      const preview = data.fileUrl ? '📎 File' : safe.slice(0, 80);
+      this.emitToUsers(
+        memberIds.filter((id) => id !== data.senderId),
+        'newConversationMessage',
+        { conversationId: data.conversationId, preview, sender: saved.username },
+      );
+    } catch (err) {
+      this.logger.error(
+        `handleSendConversationMessage error conversationId=${data?.conversationId} socket=${socket.id}`,
+        err,
+      );
+      socket.emit('chatError', { reason: 'server_error' });
+    }
+  }
+
+  @SubscribeMessage('editConversationMessage')
+  async handleEditConversationMessage(
+    socket: Socket,
+    data: { messageId: string; conversationId: string; newMessage: string },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.conversationId)) return;
+      const safe = this.sanitizeMessage(data.newMessage);
+      if (!safe.trim()) return;
+      await this.conversationsRepository.editMessage(data.messageId, safe);
+      this.server.to(data.conversationId).emit('conversationMessageEdited', {
+        messageId: data.messageId,
+        newMessage: safe,
+      });
+    } catch (_) {}
+  }
+
+  @SubscribeMessage('deleteConversationMessage')
+  async handleDeleteConversationMessage(
+    socket: Socket,
+    data: { messageId: string; conversationId: string },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.conversationId)) return;
+      await this.conversationsRepository.deleteMessage(data.messageId);
+      this.server.to(data.conversationId).emit('conversationMessageDeleted', {
+        messageId: data.messageId,
+      });
+    } catch (_) {}
+  }
+
+  @SubscribeMessage('newConversationCreated')
+  async handleNewConversationCreated(
+    socket: Socket,
+    data: { conversationId: string; memberIds: string[] },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) return;
+      this.emitToUsers(data.memberIds, 'newConversation', { conversationId: data.conversationId });
     } catch (_) {}
   }
 

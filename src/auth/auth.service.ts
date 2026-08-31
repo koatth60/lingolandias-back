@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { UnreadGlobalMessage } from 'src/chat/entities/unread-global-messages.entity';
 import { Repository } from 'typeorm';
 import { config as dotenvConfig } from 'dotenv';
+import { ConversationsRepository } from 'src/conversations/conversations.repository';
 dotenvConfig({ path: '.env.development' });
 
 @Injectable()
@@ -19,6 +20,7 @@ export class AuthService {
     private readonly mailService: MailService,
     @InjectRepository(UnreadGlobalMessage)
     private readonly unReadGlobalMessageRepo: Repository<UnreadGlobalMessage>,
+    private readonly conversationsRepository: ConversationsRepository,
   ) {}
 
   async register(newUser: any) {
@@ -46,6 +48,11 @@ export class AuthService {
     unreadGlobalMessage.teachersPolishRoom = 0;
 
     await this.unReadGlobalMessageRepo.save(unreadGlobalMessage);
+    await this.conversationsRepository.autoJoinLegacyRooms({
+      id: unsavedReadMessageUser.id,
+      role: unsavedReadMessageUser.role,
+      language: unsavedReadMessageUser.language,
+    });
 
     await this.mailService.sendUserWelcomeEmail(
       newUser.name,

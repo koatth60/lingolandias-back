@@ -9,6 +9,7 @@ import { MailService } from 'src/mail/mail.service';
 import { UsersModule } from 'src/users/users.module';
 import { ChatModule } from '../chat/chat.module';
 import { GatewayModule } from 'src/gateway/gateway.module';
+import { ConversationsModule } from 'src/conversations/conversations.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { GatewayModule } from 'src/gateway/gateway.module';
     UsersModule,
     ChatModule,
     GatewayModule,
+    ConversationsModule,
   ],
   controllers: [AuthController],
   providers: [
