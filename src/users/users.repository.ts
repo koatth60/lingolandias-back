@@ -1,11 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { Schedule, User } from './entities/user.entity';
-import { InjectRepository } from '@nestjs/typeorm';
-// import { EntityManager } from 'typeorm';
-import { In } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, In } from 'typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { UnreadGlobalMessage } from 'src/chat/entities/unread-global-messages.entity';
+import { Chat } from 'src/chat/entities/chat.entity';
+import { ArchivedChat } from 'src/chat/entities/archived-chat.entity';
+import { TrelloBoard } from 'src/trello/entities/trello-board.entity';
 
 @Injectable()
 export class UsersRepository {
@@ -18,6 +20,9 @@ export class UsersRepository {
 
     @InjectRepository(UnreadGlobalMessage)
     private readonly unReadGlobalMessageRepo: Repository<UnreadGlobalMessage>,
+
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async findByEmail(email: string): Promise<User | undefined> {
@@ -179,16 +184,26 @@ export class UsersRepository {
   }
 
   async remove(email: string): Promise<any> {
-    const user = await this.usersRepository.findOne({ where: { email } });
+    return this.dataSource.transaction(async (manager) => {
+      const user = await manager.findOne(User, { where: { email } });
+      if (!user) {
+        return 'no user found';
+      }
 
-    if (!user) {
-      return 'no user found';
-    }
-    await this.unReadGlobalMessageRepo.delete({
-      user: { id: user.id },
+      // unread-global-messages has no DB-level cascade (ON DELETE NO ACTION), so it
+      // must be cleared manually before the user row itself can be deleted.
+      await manager.delete(UnreadGlobalMessage, { user: { id: user.id } });
+
+      // trello_boards.userId is a plain column with no FK — deleting it here (its
+      // lists/cards cascade automatically) prevents boards from being orphaned
+      // forever when their owning teacher is removed.
+      await manager.delete(TrelloBoard, { userId: user.id });
+
+      // settings, push_subscriptions and schedules (student + teacher) all have
+      // ON DELETE CASCADE in the DB, so this single delete cleans those up too.
+      const deletedUser = await manager.delete(User, { email });
+      return deletedUser;
     });
-    const deletedUser = await this.usersRepository.delete({ email });
-    return deletedUser;
   }
 
   async update(updateUser: any): Promise<any> {
@@ -230,66 +245,50 @@ export class UsersRepository {
   async removeStudentsFromTeacher(body: any): Promise<any> {
     const { teacherId, studentIds } = body;
 
-    // Fetch the teacher with necessary relations
-    const teacher = await this.usersRepository.findOne({
-      where: { id: teacherId },
-      relations: ['students', 'teacherSchedules'],
+    return this.dataSource.transaction(async (manager) => {
+      const teacher = await manager.findOne(User, { where: { id: teacherId } });
+      if (!teacher || teacher.role !== 'teacher') {
+        throw new Error('Teacher not found.');
+      }
+
+      // Only unlink students that actually belong to this teacher — guards against
+      // a caller passing a student ID that belongs to someone else.
+      const students = await manager.find(User, {
+        where: { id: In(studentIds), teacher: { id: teacherId } },
+      });
+      if (!students || students.length === 0) {
+        throw new Error('No students found for this teacher.');
+      }
+      const validStudentIds = students.map((student) => student.id);
+
+      const schedules = await manager.find(Schedule, {
+        where: { teacherId: teacher.id, studentId: In(validStudentIds) },
+        select: ['id'],
+      });
+      const idsToDelete = schedules.map((schedule) => schedule.id);
+      if (idsToDelete.length > 0) {
+        await manager.delete(Schedule, idsToDelete);
+      }
+
+      // Chat deletion used to be a second, separate request fired in parallel from
+      // the frontend — if one request failed and the other didn't, the teacher-student
+      // link and the chat history could end up out of sync. Doing it here, in the same
+      // transaction as the schedule/link removal, makes the whole operation all-or-nothing.
+      await manager.delete(Chat, { room: In(validStudentIds) });
+      await manager.delete(ArchivedChat, { room: In(validStudentIds) });
+
+      students.forEach((student) => {
+        student.teacher = null;
+      });
+      await manager.save(students);
+
+      return {
+        message: 'Students removed from teacher successfully, schedules and chats deleted.',
+        deletedScheduleIds: idsToDelete,
+        teacherId,
+        studentIds: validStudentIds,
+      };
     });
-
-    if (!teacher || teacher.role !== 'teacher') {
-      throw new Error('Teacher not found.');
-    }
-
-    // Fetch all the students to be removed
-    const students = await this.usersRepository.find({
-      where: { id: In(studentIds) },
-      relations: ['studentSchedules'],
-    });
-
-    if (!students || students.length === 0) {
-      throw new Error('No students found.');
-    }
-
-    // Try to remove schedules related to the teacher and the students
-    const deleteResult = await this.scheduleRepository.find({
-      where: {
-        teacherId: teacher.id,
-        studentId: In(studentIds), // Ensure both teacherId and studentId are in the same schedule
-      },
-    });
-    const idsToDelete = deleteResult.map((schedule) => schedule.id); // Get all the IDs to delete
-    if (idsToDelete.length > 0) {
-      await this.scheduleRepository.delete(idsToDelete); // Directly delete by IDs
-    }
-    // else {
-    //   throw new Error('No schedules found to delete.');
-    // }
-    // If no schedules were deleted, throw an error and stop further execution
-    // if (deleteResult.affected === 0) {
-    //   throw new Error('No schedules were deleted. Rolling back.');
-    // }
-
-    // Remove each student from the teacher's students array
-    teacher.students = teacher.students.filter(
-      (student) => !studentIds.includes(student.id),
-    );
-
-    // Remove the teacher reference from each student's teacher field
-    students.forEach((student) => {
-      student.teacher = null;
-    });
-
-    // Save updated teacher and students
-    await this.usersRepository.save(teacher);
-    await this.usersRepository.save(students);
-
-    return {
-      message:
-        'Students removed from teacher successfully, and schedules deleted.',
-      deletedScheduleIds: idsToDelete,
-      teacherId,
-      studentIds,
-    };
   }
 
   async find() {

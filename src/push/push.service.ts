@@ -99,7 +99,19 @@ export class PushService {
       .andWhere('EXTRACT(MINUTE FROM schedule."startTime") = :minute', { minute: targetMinute })
       .getMany();
 
-    for (const schedule of upcomingSchedules) {
+    // The query above only matches day-of-week + time-of-day, so it fires every
+    // week regardless of recurrence — filter out schedules whose interval (e.g.
+    // every-2-weeks) means this particular week is actually an "off" week.
+    const dueSchedules = upcomingSchedules.filter((schedule) => {
+      const interval = schedule.recurrenceWeeks || 1;
+      if (interval <= 1) return true;
+      const weeksSinceStart = Math.round(
+        (target.getTime() - new Date(schedule.initialDateTime).getTime()) / (7 * 24 * 60 * 60 * 1000),
+      );
+      return weeksSinceStart >= 0 && weeksSinceStart % interval === 0;
+    });
+
+    for (const schedule of dueSchedules) {
       // Notify student
       if (schedule.student?.settings?.classReminders) {
         await this.sendPush(

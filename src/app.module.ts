@@ -16,6 +16,7 @@ import { SettingsModule } from './settings/settings.module';
 import { TrelloModule } from './trello/trello.module';
 import { PushModule } from './push/push.module';
 import { ClassSessionsModule } from './class-sessions/class-sessions.module';
+import { MeetingLogsModule } from './meeting-logs/meeting-logs.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 
 @Module({
@@ -40,7 +41,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
     JwtModule.register({
       global: true,
       secret: process.env.JWT_SECRET,
-      signOptions: { expiresIn: '12h' },
+      signOptions: { expiresIn: '7d' },
     }),
     AuthModule,
     ChatModule,
@@ -51,6 +52,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
     TrelloModule,
     PushModule,
     ClassSessionsModule,
+    MeetingLogsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

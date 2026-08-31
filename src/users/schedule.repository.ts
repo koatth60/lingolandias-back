@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Schedule } from './entities/user.entity';
@@ -43,6 +43,12 @@ export class ScheduleRepository {
     studentId: string;
   }): Promise<boolean> {
     const { eventIds, teacherId, studentId } = body;
+    // `IN (:...eventIds)` with an empty array produces invalid SQL ("IN ()"), which
+    // Postgres rejects with a syntax error — reachable from the UI by confirming the
+    // remove-events modal with no events checked and "remove all" left unticked.
+    if (!eventIds || eventIds.length === 0) {
+      throw new BadRequestException('No event IDs provided');
+    }
     const result = await this.repository
       .createQueryBuilder()
       .delete()

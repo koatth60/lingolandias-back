@@ -128,6 +128,12 @@ export class Schedule {
   @Column({ type: 'varchar' })
   dayOfWeek: string;
 
+  // 1 = every week (default), 2 = every other week, etc. Existing rows have no
+  // value here and TypeORM/Postgres fill them with this default (1), so old
+  // schedules keep behaving exactly as before.
+  @Column({ type: 'int', default: 1 })
+  recurrenceWeeks: number;
+
   @Column({ type: 'varchar' })
   teacherName: string;
 

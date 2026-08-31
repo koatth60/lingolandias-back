@@ -23,6 +23,12 @@ export class S3Service {
     });
   }
 
+  buildUrl(key: string): string {
+    const bucketName = this.configService.get('AWS_BUCKET_NAME');
+    const region = this.configService.get('AWS_REGION');
+    return `https://${bucketName}.s3.${region}.amazonaws.com/${key}`;
+  }
+
   async uploadFile(file: Express.Multer.File) {
     const bucketName = this.configService.get('AWS_BUCKET_NAME');
     const region = this.configService.get('AWS_REGION');
@@ -100,6 +106,8 @@ export class S3Service {
     // Splits into 10 MB parts uploaded in parallel, with automatic retry.
     const stream = createReadStream(file.path);
 
+    // Recordings can be .webm (old client-side capture) or .mp4 (Jibri) — use
+    // whatever content type multer detected instead of assuming one format.
     await new Upload({
       client: this.s3Client,
       queueSize: 4,          // 4 parallel part uploads
@@ -108,7 +116,7 @@ export class S3Service {
         Bucket: bucketName,
         Key: fileKey,
         Body: stream,
-        ContentType: 'video/webm',
+        ContentType: file.mimetype || 'video/webm',
       },
     }).done();
 

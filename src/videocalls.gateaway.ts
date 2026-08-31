@@ -8,7 +8,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import { ChatsRepository } from './chat/chats.repository';
 import { Chat } from './chat/entities/chat.entity';
-import { Injectable, OnModuleInit, Scope } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Scope } from '@nestjs/common';
 import { GlobalChat } from './chat/entities/global-chat.entity';
 import {
   CounterStrategy,
@@ -37,6 +37,8 @@ const RATE_LIMIT_MAX = 20;           // max messages per window
 export class VideoCallsGateway
   implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
 {
+  private readonly logger = new Logger(VideoCallsGateway.name);
+
   private readonly counterStrategies: CounterStrategy[] = [
     supportRoomStrategy,
     generalLanguageStrategy,
@@ -81,13 +83,17 @@ export class VideoCallsGateway
     const token =
       socket.handshake.auth?.token ||
       socket.handshake.headers?.authorization?.replace('Bearer ', '');
-    if (!token) return false;
+    if (!token) {
+      this.logger.warn(`[auth] socket=${socket.id} NO TOKEN in handshake (auth.token=${JSON.stringify(socket.handshake.auth?.token)}, header=${socket.handshake.headers?.authorization ? 'present' : 'absent'})`);
+      return false;
+    }
     try {
       const payload = this.jwtService.verify(token, { secret: process.env.JWT_SECRET });
       socket.data.userId = payload.sub || payload.id;
       socket.data.authenticated = true;
       return true;
-    } catch {
+    } catch (err) {
+      this.logger.warn(`[auth] socket=${socket.id} TOKEN REJECTED: ${err?.message} (token prefix: ${token.slice(0, 20)}...)`);
       socket.data.authenticated = false;
       return false;
     }
@@ -393,9 +399,21 @@ export class VideoCallsGateway
     },
   ) {
     try {
-      if (!this.isAuthenticated(socket)) return;
+      if (!this.isAuthenticated(socket)) {
+        this.logger.warn(
+          `chatError not_authenticated room=${data?.room} email=${data?.email} socket=${socket.id}`,
+        );
+        socket.emit('chatError', { reason: 'not_authenticated' });
+        return;
+      }
       if (!this.isValidRoom(data.room)) return;
-      if (this.isRateLimited(socket.id)) return;
+      if (this.isRateLimited(socket.id)) {
+        this.logger.warn(
+          `chatError rate_limited room=${data?.room} email=${data?.email} socket=${socket.id}`,
+        );
+        socket.emit('chatError', { reason: 'rate_limited' });
+        return;
+      }
 
       const safe = this.sanitizeMessage(data.message);
 
@@ -418,7 +436,13 @@ export class VideoCallsGateway
         preview,
         sender: chatData.username,
       });
-    } catch (_) {}
+    } catch (err) {
+      this.logger.error(
+        `handleChat error room=${data?.room} email=${data?.email} socket=${socket.id}`,
+        err,
+      );
+      socket.emit('chatError', { reason: 'server_error' });
+    }
   }
 
   @SubscribeMessage('globalChat')
@@ -434,9 +458,21 @@ export class VideoCallsGateway
     },
   ) {
     try {
-      if (!this.isAuthenticated(socket)) return;
+      if (!this.isAuthenticated(socket)) {
+        this.logger.warn(
+          `chatError not_authenticated room=${data?.room} email=${data?.email} socket=${socket.id}`,
+        );
+        socket.emit('chatError', { reason: 'not_authenticated' });
+        return;
+      }
       if (!this.isValidRoom(data.room)) return;
-      if (this.isRateLimited(socket.id)) return;
+      if (this.isRateLimited(socket.id)) {
+        this.logger.warn(
+          `chatError rate_limited room=${data?.room} email=${data?.email} socket=${socket.id}`,
+        );
+        socket.emit('chatError', { reason: 'rate_limited' });
+        return;
+      }
 
       const safe = this.sanitizeMessage(data.message);
 
@@ -470,7 +506,13 @@ export class VideoCallsGateway
         preview,
         sender: globalChatData.username,
       });
-    } catch (_) {}
+    } catch (err) {
+      this.logger.error(
+        `handleGlobalChat error room=${data?.room} email=${data?.email} socket=${socket.id}`,
+        err,
+      );
+      socket.emit('chatError', { reason: 'server_error' });
+    }
   }
 
   @SubscribeMessage('supportChat')
