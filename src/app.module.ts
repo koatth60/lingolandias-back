@@ -18,6 +18,7 @@ import { PushModule } from './push/push.module';
 import { ClassSessionsModule } from './class-sessions/class-sessions.module';
 import { MeetingLogsModule } from './meeting-logs/meeting-logs.module';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ConversationsModule } from './conversations/conversations.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
     PushModule,
     ClassSessionsModule,
     MeetingLogsModule,
+    ConversationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
