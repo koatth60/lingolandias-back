@@ -9,6 +9,10 @@ export class ConversationsService {
     return this.conversationsRepository.findUserConversations(userId);
   }
 
+  getMembers(conversationId: string) {
+    return this.conversationsRepository.getMembers(conversationId);
+  }
+
   findOrCreateDm(userId: string, otherUserId: string) {
     return this.conversationsRepository.findOrCreateDm(userId, otherUserId);
   }
@@ -25,7 +29,7 @@ export class ConversationsService {
     return this.conversationsRepository.removeMember(conversationId, userId);
   }
 
-  renameGroup(conversationId: string, params: { name?: string; avatarUrl?: string }) {
+  renameGroup(conversationId: string, params: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean }) {
     return this.conversationsRepository.renameGroup(conversationId, params);
   }
 

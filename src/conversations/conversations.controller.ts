@@ -36,6 +36,11 @@ export class ConversationsController {
     });
   }
 
+  @Get(':id/members')
+  getMembers(@Param('id') id: string) {
+    return this.conversationsService.getMembers(id);
+  }
+
   @Get(':id/archived-messages')
   getArchivedMessages(@Param('id') id: string, @Query('page') page?: string) {
     return this.conversationsService.getArchivedMessages(id, page ? parseInt(page, 10) : 1);
@@ -77,7 +82,10 @@ export class ConversationsController {
   }
 
   @Patch(':id')
-  renameGroup(@Param('id') id: string, @Body() body: { name?: string; avatarUrl?: string }) {
+  renameGroup(
+    @Param('id') id: string,
+    @Body() body: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean },
+  ) {
     return this.conversationsService.renameGroup(id, body);
   }
 }

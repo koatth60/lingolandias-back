@@ -30,13 +30,33 @@ export class ConversationsRepository {
     return rows.map((r) => r.userId);
   }
 
+  async getMembers(conversationId: string) {
+    const rows = await this.memberRepo.find({ where: { conversationId } });
+    if (!rows.length) return [];
+    const users = await this.userRepo.findBy({ id: In(rows.map((r) => r.userId)) });
+    const userById = new Map(users.map((u) => [u.id, u]));
+    return rows
+      .map((r) => {
+        const u = userById.get(r.userId);
+        if (!u) return null;
+        return {
+          id: u.id, name: u.name, lastName: u.lastName, email: u.email,
+          avatarUrl: u.avatarUrl, role: u.role, online: u.online,
+          memberRole: r.role,
+        };
+      })
+      .filter(Boolean);
+  }
+
   async isMember(conversationId: string, userId: string): Promise<boolean> {
     const row = await this.memberRepo.findOne({ where: { conversationId, userId } });
     return !!row;
   }
 
   async findUserConversations(userId: string) {
-    const memberships = await this.memberRepo.find({ where: { userId } });
+    const memberships = (await this.memberRepo.find({ where: { userId } })).filter(
+      (m) => m.conversationId !== 'uuid-support',
+    );
     if (!memberships.length) return [];
 
     const conversationIds = memberships.map((m) => m.conversationId);
@@ -71,6 +91,21 @@ export class ConversationsRepository {
           .getMany()
       : [];
     const lastMessageByConv = new Map(lastMessages.map((m) => [m.conversationId, m]));
+
+    // Fallback to archived history for conversations whose only activity is
+    // older than the archive cutoff — otherwise they'd look empty even though
+    // they have real history.
+    const missingConvIds = conversationIds.filter((id) => !lastMessageByConv.has(id));
+    if (missingConvIds.length) {
+      const archivedLast = await this.archivedRepo
+        .createQueryBuilder('am')
+        .distinctOn(['am.conversationId'])
+        .where('am.conversationId IN (:...missingConvIds)', { missingConvIds })
+        .orderBy('am.conversationId')
+        .addOrderBy('am.timestamp', 'DESC')
+        .getMany();
+      archivedLast.forEach((am) => lastMessageByConv.set(am.conversationId, am as any));
+    }
 
     // Unread counts: messages after this member's lastReadAt, not sent by them.
     const unreadRows = conversationIds.length
@@ -185,12 +220,16 @@ export class ConversationsRepository {
     await this.memberRepo.delete({ conversationId, userId });
   }
 
-  async renameGroup(conversationId: string, params: { name?: string; avatarUrl?: string }) {
+  async renameGroup(
+    conversationId: string,
+    params: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean },
+  ) {
     const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
     if (!conversation) throw new NotFoundException('Conversation not found');
     if (conversation.type !== 'group') throw new NotFoundException('Only groups can be renamed');
     if (params.name?.trim()) conversation.name = params.name.trim();
     if (params.avatarUrl !== undefined) conversation.avatarUrl = params.avatarUrl;
+    if (params.linkedToSchedule !== undefined) conversation.linkedToSchedule = params.linkedToSchedule;
     return this.conversationRepo.save(conversation);
   }
 
@@ -203,13 +242,39 @@ export class ConversationsRepository {
       .addOrderBy('m.id', 'DESC')
       .take(limit);
 
+    let cursor: { timestamp: Date; id: string } | undefined;
     if (opts.before) {
-      const cursor = await this.messageRepo.findOneBy({ id: opts.before });
-      if (cursor) {
-        qb.andWhere('(m.timestamp, m.id) < (:ts, :id)', { ts: cursor.timestamp, id: cursor.id });
+      const found = await this.messageRepo.findOneBy({ id: opts.before });
+      if (found) {
+        cursor = found;
+        qb.andWhere('(m.timestamp, m.id) < (:ts, :id)', { ts: found.timestamp, id: found.id });
       }
     }
     const messages = await qb.getMany();
+
+    // Active messages alone weren't enough to fill the page (either this
+    // conversation's whole history is short, or we've scrolled past the
+    // active window) — pull the rest from archived_messages so history
+    // doesn't just silently stop once it ages out of the active table.
+    const remaining = limit - messages.length;
+    if (remaining > 0) {
+      const archQb = this.archivedRepo
+        .createQueryBuilder('am')
+        .where('am.conversationId = :conversationId', { conversationId })
+        .orderBy('am.timestamp', 'DESC')
+        .addOrderBy('am.id', 'DESC')
+        .take(remaining);
+
+      const archCursor = messages.length
+        ? { timestamp: messages[messages.length - 1].timestamp, id: messages[messages.length - 1].id }
+        : cursor;
+      if (archCursor) {
+        archQb.andWhere('(am.timestamp, am.id) < (:ts, :id)', { ts: archCursor.timestamp, id: archCursor.id });
+      }
+      const archived = await archQb.getMany();
+      messages.push(...(archived as any));
+    }
+
     return messages.reverse();
   }
 

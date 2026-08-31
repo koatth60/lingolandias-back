@@ -162,4 +162,11 @@ export class Schedule {
   })
   @JoinColumn({ name: 'teacherId' })
   teacher: User;
+
+  // Explicit Jitsi room override for group classes booked from a group chat —
+  // several students share one room here, so it can't be the usual implicit
+  // "room = studentId" convention. Null for every normal 1:1 class (existing
+  // behavior unchanged).
+  @Column({ type: 'varchar', nullable: true })
+  roomId?: string;
 }
