@@ -824,6 +824,25 @@ export class VideoCallsGateway
     }
   }
 
+  // 1:1 only (see IncomingCallBanner) — lets the caller log "missed call"
+  // the moment the other side actively declines, instead of only finding
+  // out CALL_RING_TIMEOUT_MS later when their own client re-checks
+  // participant count.
+  @SubscribeMessage('callDeclined')
+  async handleCallDeclined(
+    socket: Socket,
+    data: { conversationId: string; callerId: string; calleeId: string },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) return;
+      if (!data.callerId) return;
+      this.emitToUsers([data.callerId], 'callDeclined', {
+        conversationId: data.conversationId,
+        calleeId: data.calleeId,
+      });
+    } catch (_) {}
+  }
+
   private getCounterField(room: string): CounterField {
     if (room === 'uuid-support') return 'supportRoom';
     if (room.startsWith('uuid-teacher-')) {
