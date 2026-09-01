@@ -136,6 +136,19 @@ export class VideoCallsGateway
     this.verifySocketToken(socket);
   }
 
+  // socketToUser is only populated by the 'registerUser' event, but
+  // CallChatWindow's and the legacy ChatWindow's own dedicated socket
+  // connections authenticate via handshake token and never emit
+  // 'registerUser' at all — resolving purely through socketToUser left them
+  // with no known userId, so canJoinRoom's membership check always failed
+  // and socket.join was silently skipped, breaking live message delivery
+  // for anyone chatting from inside a video call. socket.data.userId (set
+  // by verifySocketToken above) covers exactly that gap without touching
+  // userSockets/isFirstSocket bookkeeping used for online-status broadcasts.
+  private resolveSocketUserId(socket: Socket): string | undefined {
+    return this.socketToUser.get(socket.id) || socket.data?.userId;
+  }
+
   async handleDisconnect(socket: Socket) {
     const userId = this.socketToUser.get(socket.id);
     if (!userId) return;
@@ -241,7 +254,7 @@ export class VideoCallsGateway
     try {
       if (!this.isValidRoom(data.room)) return;
 
-      const userId = this.socketToUser.get(socket.id);
+      const userId = this.resolveSocketUserId(socket);
       // Legacy DM conversations were migrated with their id set to one of
       // the participants' own userId, so a raw room string can collide with
       // a real conversation. Block joining any tracked conversation the
@@ -293,7 +306,7 @@ export class VideoCallsGateway
         socket.emit('roomMembers', { room: data.room, members: [] });
         return;
       }
-      const userId = this.socketToUser.get(socket.id);
+      const userId = this.resolveSocketUserId(socket);
       if (!userId || !(await this.conversationsRepository.canJoinRoom(data.room, userId))) {
         socket.emit('roomMembers', { room: data.room, members: [] });
         return;
