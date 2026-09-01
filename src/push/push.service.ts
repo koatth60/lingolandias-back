@@ -45,7 +45,23 @@ export class PushService {
     await this.subscriptionRepository.delete({ userId });
   }
 
-  private async sendPush(userId: string, title: string, body: string) {
+  // Reaches someone even with the tab/browser fully closed, unlike the
+  // in-app IncomingCallBanner (socket-only). The deep link is query-params
+  // rather than router state, since a service worker's notificationclick
+  // can only open a URL — JitsiClassRoom.jsx falls back to reading these
+  // when location.state is empty (e.g. after a fresh tab opened this way).
+  async sendCallNotification(
+    userId: string,
+    params: { callerName: string; chatName?: string; chatType: string; conversationId: string; callerId: string },
+  ) {
+    const title = params.chatType === 'group' && params.chatName
+      ? `${params.callerName} is calling in ${params.chatName}`
+      : `Incoming call from ${params.callerName}`;
+    const url = `/classroom?conversationId=${encodeURIComponent(params.conversationId)}&chatType=${encodeURIComponent(params.chatType)}&callerId=${encodeURIComponent(params.callerId)}&callerName=${encodeURIComponent(params.callerName)}${params.chatName ? `&chatName=${encodeURIComponent(params.chatName)}` : ''}`;
+    await this.sendPush(userId, title, 'Tap to join', url);
+  }
+
+  private async sendPush(userId: string, title: string, body: string, url = '/') {
     const subscription = await this.subscriptionRepository.findOne({
       where: { userId },
     });
@@ -59,7 +75,7 @@ export class PushService {
     try {
       await webpush.sendNotification(
         pushSubscription,
-        JSON.stringify({ title, body, icon: '/logo.png' }),
+        JSON.stringify({ title, body, icon: '/logo.png', url }),
       );
     } catch (err) {
       this.logger.error(

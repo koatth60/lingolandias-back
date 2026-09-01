@@ -24,6 +24,7 @@ import { In, Repository } from 'typeorm';
 import { User } from './users/entities/user.entity';
 import { JwtService } from '@nestjs/jwt';
 import { ConversationsRepository } from './conversations/conversations.repository';
+import { PushService } from './push/push.service';
 
 const MAX_MESSAGE_LENGTH = 4000;
 const RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
@@ -71,6 +72,7 @@ export class VideoCallsGateway
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     private readonly conversationsRepository: ConversationsRepository,
+    private readonly pushService: PushService,
   ) {}
 
   async onModuleInit() {
@@ -602,6 +604,26 @@ export class VideoCallsGateway
   // new handlers, since those write to the new `messages` table instead of
   // `chats`/`global-chats`.
 
+  // Fire-and-forget alongside emitToUsers — reaches a subscribed browser
+  // even fully closed, unlike the socket event alone. Never awaited by the
+  // caller: a slow/failing push provider shouldn't delay the in-app ring.
+  private pushCallNotification(
+    userIds: string[],
+    payload: { conversationId: string; callerId: string; callerName: string; chatName: string; chatType: string },
+  ) {
+    for (const userId of userIds) {
+      this.pushService
+        .sendCallNotification(userId, {
+          callerName: payload.callerName,
+          chatName: payload.chatName,
+          chatType: payload.chatType,
+          conversationId: payload.conversationId,
+          callerId: payload.callerId,
+        })
+        .catch((err) => this.logger.error(`[callStarted] push failed for userId=${userId}: ${err?.message}`));
+    }
+  }
+
   private emitToUsers(userIds: string[], event: string, payload: any) {
     for (const userId of userIds) {
       const socketIds = this.userSockets.get(userId);
@@ -804,6 +826,7 @@ export class VideoCallsGateway
       if (data.otherUserId) {
         this.logger.warn(`[callStarted] 1:1 notify otherUserId=${data.otherUserId} caller=${data.callerId}`);
         this.emitToUsers([data.otherUserId], 'callStarted', payload);
+        this.pushCallNotification([data.otherUserId], payload);
         return;
       }
       if (!this.isValidRoom(data.conversationId)) {
@@ -819,6 +842,7 @@ export class VideoCallsGateway
       const targets = memberIds.filter((id) => id !== data.callerId);
       this.logger.warn(`[callStarted] group notify targets=${JSON.stringify(targets)} caller=${data.callerId} conversationId=${data.conversationId}`);
       this.emitToUsers(targets, 'callStarted', payload);
+      this.pushCallNotification(targets, payload);
     } catch (err) {
       this.logger.error(`[callStarted] error: ${err?.message}`, err?.stack);
     }

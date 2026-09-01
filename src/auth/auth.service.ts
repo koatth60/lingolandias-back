@@ -76,12 +76,16 @@ export class AuthService {
       throw new BadRequestException('Invalid credentials');
     }
 
+    // Marks the row online immediately (harmless — just a flag, not a
+    // broadcast) but deliberately does NOT call notifyUserOnline here: the
+    // socket's own registerUser handler broadcasts 'online' once the actual
+    // connection is live, moments later. Doing both meant every single
+    // login produced two "X is now online" toasts for everyone else —
+    // reported as duplicate alerts on login (never on logout, which has no
+    // equivalent direct broadcast here — only the one from the socket
+    // disconnecting).
     foundUser.online = 'online';
     await this.usersRepository.save(foundUser);
-    this.videoCallsGateway.notifyUserOnline({
-      id: foundUser.id,
-      name: foundUser.name + ' ' + foundUser.lastName,
-    });
     const userWithSettings = await this.usersRepository.findByEmail(email);
     const userPayload = { email: userWithSettings.email, id: userWithSettings.id };
     const token = this.jwtService.sign(userPayload);

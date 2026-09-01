@@ -9,5 +9,6 @@ import { Schedule } from '../users/entities/user.entity';
   imports: [TypeOrmModule.forFeature([PushSubscription, Schedule])],
   controllers: [PushController],
   providers: [PushService],
+  exports: [PushService],
 })
 export class PushModule {}
