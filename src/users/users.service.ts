@@ -244,7 +244,17 @@ export class UsersService {
       recurrenceWeeks: body.recurrenceWeeks || 1,
     });
 
-    await this.conversationsService.renameGroup(body.conversationId, { linkedToSchedule: true });
+    // Also sets the conversation's own name (and nameIsCustom, via
+    // renameGroup) to the chosen class name — without this, the conversation
+    // keeps whatever name it had before scheduling, and the very next
+    // addMember call (nameIsCustom still false) auto-recomputes the group's
+    // display name from its member list and overwrites this Schedule row's
+    // groupName right back to that generic name, silently clobbering the
+    // class name the teacher just deliberately chose.
+    await this.conversationsService.renameGroup(body.conversationId, {
+      linkedToSchedule: true,
+      name: body.groupName,
+    });
     // Picks up any teachers who were already members of this group before it
     // got scheduled — they see the class on their own calendar too now.
     await this.conversationsService.syncCoTeachers(body.conversationId);
