@@ -31,7 +31,15 @@ export class PushService {
     userId: string,
     subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
   ) {
+    // A browser has exactly one push subscription per origin — subscribing
+    // from a second account on the same device returns the SAME endpoint,
+    // not a new one. Without clearing any other userId already sitting on
+    // that endpoint, both accounts would end up with their own row pointing
+    // at the same physical device, so it'd receive pushes meant for either
+    // one regardless of who's actually logged in there now. Whoever
+    // subscribed most recently on a given device is the one who owns it.
     await this.subscriptionRepository.delete({ userId });
+    await this.subscriptionRepository.delete({ endpoint: subscription.endpoint });
     const sub = this.subscriptionRepository.create({
       userId,
       endpoint: subscription.endpoint,
