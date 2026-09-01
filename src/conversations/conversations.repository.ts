@@ -179,7 +179,11 @@ export class ConversationsRepository {
           lastActivityAt,
           // "Deleted for me" stays hidden only until new activity arrives —
           // otherwise clearing a chat would silently swallow future messages.
-          _hidden: !!membership?.deletedAt && new Date(membership.deletedAt) >= new Date(lastActivityAt),
+          // DMs with zero messages ever sent are drafts that never got used —
+          // don't clutter the list with them (mirrors the client's draft-chat behavior).
+          _hidden:
+            (!!membership?.deletedAt && new Date(membership.deletedAt) >= new Date(lastActivityAt)) ||
+            (c.type === 'dm' && !lastMessage),
         };
       })
       .filter((c) => !c._hidden)
@@ -361,14 +365,26 @@ export class ConversationsRepository {
     if (historyFloor) qb.andWhere('m.timestamp >= :historyFloor', { historyFloor });
 
     let cursor: { timestamp: Date; id: string } | undefined;
+    let cursorIsArchived = false;
     if (opts.before) {
       const found = await this.messageRepo.findOneBy({ id: opts.before });
       if (found) {
         cursor = found;
         qb.andWhere('(m.timestamp, m.id) < (:ts, :id)', { ts: found.timestamp, id: found.id });
+      } else {
+        // The cursor wasn't in the active table — it must be an archived
+        // message, meaning we've already paged past everything active.
+        // Without this fallback the lookup above silently fails and the
+        // query below re-fetches the most recent active messages on every
+        // "load more" call, making history look stuck.
+        const archFound = await this.archivedRepo.findOneBy({ id: opts.before });
+        if (archFound) {
+          cursor = archFound;
+          cursorIsArchived = true;
+        }
       }
     }
-    const messages = await qb.getMany();
+    const messages = cursorIsArchived ? [] : await qb.getMany();
 
     // Active messages alone weren't enough to fill the page (either this
     // conversation's whole history is short, or we've scrolled past the
