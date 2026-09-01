@@ -431,7 +431,17 @@ export class ConversationsRepository {
       messages.push(...(archived as any));
     }
 
-    return messages.reverse();
+    // A message can briefly exist in both tables if the archive job's
+    // insert-then-delete isn't atomic — de-dupe by id so a client never
+    // renders the same message twice.
+    const seen = new Set<string>();
+    const deduped = messages.filter((m) => {
+      if (seen.has(m.id)) return false;
+      seen.add(m.id);
+      return true;
+    });
+
+    return deduped.reverse();
   }
 
   async getArchivedMessages(conversationId: string, page: number) {
