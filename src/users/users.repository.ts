@@ -110,6 +110,26 @@ export class UsersRepository {
     await this.usersRepository.update({}, { online: 'offline' } as any);
   }
 
+  // Used by group scheduling (Fase 4) — scheduling a class with a student
+  // who has no assigned teacher yet also assigns them, mirroring
+  // assignStudent's own relation, so they don't wrongly keep showing up in
+  // the admin's "unassigned students" list despite having an active class.
+  // Never reassigns someone who already has a different teacher — that's a
+  // deliberate, separate decision, not a side effect of scheduling.
+  async assignTeacherIfUnassigned(teacherId: string, studentIds: string[]): Promise<void> {
+    if (!studentIds.length) return;
+    const teacher = await this.usersRepository.findOneBy({ id: teacherId });
+    if (!teacher) return;
+    const students = await this.usersRepository.find({
+      where: { id: In(studentIds) },
+      relations: ['teacher'],
+    });
+    const toAssign = students.filter((s) => !s.teacher);
+    if (!toAssign.length) return;
+    toAssign.forEach((s) => (s.teacher = teacher));
+    await this.usersRepository.save(toAssign);
+  }
+
   async assignStudent(body: any): Promise<any> {
     const { teacherId, studentId, events } = body;
 

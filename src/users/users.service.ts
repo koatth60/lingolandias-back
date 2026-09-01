@@ -248,6 +248,10 @@ export class UsersService {
     // Picks up any teachers who were already members of this group before it
     // got scheduled — they see the class on their own calendar too now.
     await this.conversationsService.syncCoTeachers(body.conversationId);
+    // A student with no assigned teacher yet is now assigned to this one —
+    // otherwise they'd keep showing up as "unassigned" in the admin panel
+    // despite having an active class.
+    await this.usersRepository.assignTeacherIfUnassigned(body.teacherId, students.map((s) => s.id));
 
     savedSchedules.forEach((schedule) => {
       this.gateway.notifyScheduleUpdated({ studentId: schedule.studentId, action: 'add', schedule });
@@ -307,6 +311,7 @@ export class UsersService {
     if (!newRows.length) {
       throw new NotFoundException('No existing class found to extend for this room');
     }
+    await this.usersRepository.assignTeacherIfUnassigned(body.teacherId, [body.studentId]);
 
     // When a name was chosen, this also broadcasts a live 'modify' to every
     // existing member's calendar (see ConversationsRepository.renameGroup /

@@ -46,6 +46,25 @@ export class ConversationsRepository {
     );
   }
 
+  // If this student's currently-assigned teacher (User.teacher — the
+  // classic assignstudent relation, separate from Schedule rows) is the one
+  // this class belonged to, and they now have zero remaining Schedule rows
+  // with that teacher, they're no longer really "assigned" — clear the
+  // relation so they show back up in the admin's unassigned-students list
+  // instead of looking assigned to a teacher they have no class with.
+  private async maybeUnassignStudent(teacherId: string, studentId: string) {
+    const student = await this.userRepo.findOne({
+      where: { id: studentId, teacher: { id: teacherId } },
+      relations: ['teacher'],
+    });
+    if (!student) return;
+    const remaining = await this.scheduleRepo.count({ where: { teacherId, studentId } });
+    if (remaining === 0) {
+      student.teacher = null;
+      await this.userRepo.save(student);
+    }
+  }
+
   // Recomputes coTeacherIds for a linked room's Schedule rows to exactly
   // "current teacher members minus whoever owns the class" — called
   // whenever group membership changes (add/remove) so a teacher added
@@ -422,6 +441,7 @@ export class ConversationsRepository {
           action: 'remove',
           eventIds: removedRows.map((r) => r.id),
         });
+        await this.maybeUnassignStudent(removedRows[0].teacherId, userId);
       }
       // Also drops the departed member from coTeacherIds if they were a
       // co-teacher rather than a student — harmless no-op otherwise.
@@ -532,14 +552,16 @@ export class ConversationsRepository {
       removedSchedules.forEach((row) => {
         byStudent.set(row.studentId, [...(byStudent.get(row.studentId) || []), row.id]);
       });
-      byStudent.forEach((eventIds, studentId) => {
+      const primaryTeacherId = removedSchedules[0].teacherId;
+      for (const [studentId, eventIds] of byStudent) {
         this.scheduleBroadcaster.notifyScheduleUpdated({
           studentId,
-          teacherId: removedSchedules[0].teacherId,
+          teacherId: primaryTeacherId,
           action: 'remove',
           eventIds,
         });
-      });
+        await this.maybeUnassignStudent(primaryTeacherId, studentId);
+      }
     }
     return memberIds;
   }
