@@ -38,6 +38,13 @@ export class UsersRepository {
     });
   }
 
+  // Lightweight bulk lookup (no relations) for cases that only need id/role,
+  // e.g. filtering a candidate list down to actual students server-side.
+  async findByIds(ids: string[]): Promise<User[]> {
+    if (!ids.length) return [];
+    return this.usersRepository.findBy({ id: In(ids) });
+  }
+
   async findById(id: string): Promise<User | undefined> {
     return await this.usersRepository.findOne({
       where: { id },

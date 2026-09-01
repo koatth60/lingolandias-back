@@ -90,6 +90,12 @@ export class UsersController {
     return this.usersService.getStudentProfile(studentId);
   }
 
+  @Get('teacher-profile/:teacherId')
+  @HttpCode(HttpStatus.OK)
+  getTeacherProfile(@Param('teacherId') teacherId: string) {
+    return this.usersService.getTeacherProfile(teacherId);
+  }
+
   @Post('assignstudent')
   @HttpCode(HttpStatus.OK)
   assignStudent(@Body() body: any) {

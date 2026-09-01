@@ -21,6 +21,19 @@ export class UsersService {
     return teacher;
   }
 
+  // Never let a non-student (another teacher, an admin) end up as a Schedule
+  // row's studentId — that row would be permanently invisible to them (their
+  // own calendar only ever reads rows keyed by their id as *teacherId*), and
+  // scheduling is only meant to model a teacher/student relationship anyway.
+  // Silently drops anyone who isn't role:'user' rather than failing the
+  // whole request over a mixed-role member list.
+  private async filterToStudents<T extends { id: string }>(candidates: T[]): Promise<T[]> {
+    if (!candidates.length) return [];
+    const users = await this.usersRepository.findByIds(candidates.map((c) => c.id));
+    const studentIds = new Set(users.filter((u) => u.role === 'user').map((u) => u.id));
+    return candidates.filter((c) => studentIds.has(c.id));
+  }
+
   async findAll() {
     const users = await this.usersRepository.findAll();
     if (!users || users.length === 0) {
@@ -129,6 +142,16 @@ export class UsersService {
     };
   }
 
+  // Mirrors getStudentProfile — lets a teacher refetch their own schedules on
+  // demand (e.g. on the Schedule page mounting) instead of only ever seeing
+  // whatever was loaded at login plus whatever live socket events happened
+  // to arrive while that page was open.
+  async getTeacherProfile(teacherId: string) {
+    const user = await this.usersRepository.findById(teacherId);
+    if (!user) throw new NotFoundException('Teacher not found');
+    return { teacherSchedules: user.teacherSchedules };
+  }
+
   async getAdminStats() {
     return this.usersRepository.getAdminStats();
   }
@@ -199,14 +222,15 @@ export class UsersService {
     recurrenceWeeks?: number;
   }) {
     await this.requireTeacher(body.teacherId);
-    if (!body.students?.length) {
+    const students = await this.filterToStudents(body.students || []);
+    if (!students.length) {
       throw new NotFoundException('At least one student is required');
     }
 
     const savedSchedules = await this.scheduleRepository.createGroupSchedule({
       teacherId: body.teacherId,
       teacherName: body.teacherName,
-      students: body.students,
+      students,
       roomId: body.conversationId,
       groupName: body.groupName,
       initialDateTime: new Date(body.initialDateTime),
@@ -248,6 +272,10 @@ export class UsersService {
     body: { teacherId: string; studentId: string; studentName: string; groupName?: string },
   ) {
     await this.requireTeacher(body.teacherId);
+    const [target] = await this.filterToStudents([{ id: body.studentId }]);
+    if (!target) {
+      throw new ForbiddenException('Only a student can be added to a scheduled class');
+    }
     await this.scheduleRepository.backfillRoomId(body.teacherId, body.studentId, roomId);
 
     if (body.groupName) {
