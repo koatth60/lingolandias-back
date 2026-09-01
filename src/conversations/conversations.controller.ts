@@ -89,6 +89,18 @@ export class ConversationsController {
     return { conversation };
   }
 
+  // Auto-repair for legacy 1:1 classes whose "room" (the student's own
+  // userId, by convention) never had a real Conversation behind it — see
+  // ConversationsRepository.ensureDm. Called once when entering a private
+  // call/chat, before the chat is actually used.
+  @Post('dm/ensure')
+  async ensureDm(@Body() body: { conversationId: string; userId: string; otherUserId: string }) {
+    if (!body?.conversationId || !body?.userId || !body?.otherUserId) {
+      throw new BadRequestException('conversationId, userId and otherUserId are required');
+    }
+    return this.conversationsService.ensureDm(body.conversationId, body.userId, body.otherUserId);
+  }
+
   @Post('group')
   createGroup(
     @Body() body: { createdBy: string; name: string; avatarUrl?: string; memberIds: string[] },

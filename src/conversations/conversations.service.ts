@@ -21,6 +21,10 @@ export class ConversationsService {
     return this.conversationsRepository.findExistingDm(userId, otherUserId);
   }
 
+  ensureDm(conversationId: string, userId: string, otherUserId: string) {
+    return this.conversationsRepository.ensureDm(conversationId, userId, otherUserId);
+  }
+
   createGroup(params: { createdBy: string; name: string; avatarUrl?: string; memberIds: string[] }) {
     return this.conversationsRepository.createGroup(params);
   }

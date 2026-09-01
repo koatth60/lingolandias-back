@@ -331,6 +331,39 @@ export class ConversationsRepository {
     });
   }
 
+  // Auto-repara clases 1:1 "legacy" (creadas vía assignStudent/add-event,
+  // sin roomId): su videollamada usa el studentId como sala/conversationId
+  // por convención histórica, pero esa fila de Conversation solo existía si
+  // el estudiante ya había usado el chat viejo antes de la migración 001.
+  // Sin esto, cualquier mensaje enviado en esa clase se rechazaba en
+  // silencio por isMember (nadie era miembro de una conversación que nunca
+  // existió) — se veía como "escribo y el mensaje desaparece".
+  // A diferencia de findOrCreateDm (que genera un id aleatorio para
+  // conversaciones genuinamente nuevas iniciadas desde Messages), esto crea
+  // la conversación con el id EXACTO pedido — imprescindible porque
+  // Schedule.roomId / el nombre de sala de Jitsi ya están fijados a ese id
+  // en todo el resto del sistema. Solo agrega filas que faltan; nunca borra
+  // ni modifica nada existente.
+  async ensureDm(conversationId: string, userId: string, otherUserId: string): Promise<Conversation> {
+    let conversation = await this.conversationRepo.findOneBy({ id: conversationId });
+    if (conversation && conversation.type !== 'dm') {
+      // Ya existe algo con ese id que no es un DM — no debería pasar nunca
+      // en la práctica (conversationId aquí siempre es el userId real de un
+      // estudiante), pero por seguridad no tocamos nada ajeno.
+      return conversation;
+    }
+    if (!conversation) {
+      conversation = this.conversationRepo.create({ id: conversationId, type: 'dm' as ConversationType });
+      await this.conversationRepo.save(conversation);
+    }
+    for (const id of [userId, otherUserId]) {
+      if (!(await this.isMember(conversationId, id))) {
+        await this.memberRepo.save({ conversationId, userId: id, role: 'member' });
+      }
+    }
+    return conversation;
+  }
+
   async createGroup(params: {
     createdBy: string;
     name: string;
