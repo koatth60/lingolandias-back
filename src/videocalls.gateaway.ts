@@ -605,6 +605,9 @@ export class VideoCallsGateway
   private emitToUsers(userIds: string[], event: string, payload: any) {
     for (const userId of userIds) {
       const socketIds = this.userSockets.get(userId);
+      if (event === 'callStarted') {
+        this.logger.warn(`[emitToUsers] userId=${userId} socketIds=${socketIds ? JSON.stringify([...socketIds]) : 'NONE'}`);
+      }
       if (!socketIds) continue;
       for (const socketId of socketIds) {
         this.server.to(socketId).emit(event, payload);
@@ -626,6 +629,7 @@ export class VideoCallsGateway
       userUrl?: string;
       userRole?: string;
       replyTo?: { id: string; message: string; username: string } | null;
+      messageType?: string;
     },
   ) {
     try {
@@ -656,6 +660,7 @@ export class VideoCallsGateway
         userUrl: data.userUrl,
         userRole: data.userRole,
         replyTo: data.replyTo || null,
+        messageType: data.messageType === 'missed_call' ? 'missed_call' : undefined,
         timestamp: new Date(),
       });
 
@@ -759,6 +764,64 @@ export class VideoCallsGateway
       if (!this.isAuthenticated(socket)) return;
       this.emitToUsers(data.memberIds, 'newConversation', { conversationId: data.conversationId });
     } catch (_) {}
+  }
+
+  // Fired by the first participant to join a call (see JitsiClassRoom.jsx,
+  // which only emits this when it finds itself alone in the room) so the
+  // other side gets a real "incoming call" banner with ringtone — Accept
+  // jumps straight into the same room, Decline just dismisses it.
+  //
+  // Two delivery paths:
+  // - otherUserId given (DM, or a scheduled 1:1 class joined from Schedule
+  //   where roomId doesn't always correspond to a real conversations row):
+  //   notify that one person directly, no DB lookup needed.
+  // - otherwise (group): resolve members from conversation_members and
+  //   notify everyone but the caller.
+  @SubscribeMessage('callStarted')
+  async handleCallStarted(
+    socket: Socket,
+    data: {
+      conversationId: string;
+      callerId: string;
+      callerName: string;
+      chatName: string;
+      chatType: string;
+      otherUserId?: string;
+    },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) {
+        this.logger.warn(`[callStarted] rejected: socket not authenticated (socket=${socket.id})`);
+        return;
+      }
+      const payload = {
+        conversationId: data.conversationId,
+        callerId: data.callerId,
+        callerName: data.callerName?.slice(0, 100) || 'Someone',
+        chatName: data.chatName?.slice(0, 100) || '',
+        chatType: data.chatType,
+      };
+      if (data.otherUserId) {
+        this.logger.warn(`[callStarted] 1:1 notify otherUserId=${data.otherUserId} caller=${data.callerId}`);
+        this.emitToUsers([data.otherUserId], 'callStarted', payload);
+        return;
+      }
+      if (!this.isValidRoom(data.conversationId)) {
+        this.logger.warn(`[callStarted] rejected: invalid room conversationId=${data.conversationId}`);
+        return;
+      }
+      const isMember = await this.conversationsRepository.isMember(data.conversationId, data.callerId);
+      if (!isMember) {
+        this.logger.warn(`[callStarted] rejected: caller=${data.callerId} not a member of conversationId=${data.conversationId}`);
+        return;
+      }
+      const memberIds = await this.conversationsRepository.getMemberIds(data.conversationId);
+      const targets = memberIds.filter((id) => id !== data.callerId);
+      this.logger.warn(`[callStarted] group notify targets=${JSON.stringify(targets)} caller=${data.callerId} conversationId=${data.conversationId}`);
+      this.emitToUsers(targets, 'callStarted', payload);
+    } catch (err) {
+      this.logger.error(`[callStarted] error: ${err?.message}`, err?.stack);
+    }
   }
 
   private getCounterField(room: string): CounterField {
