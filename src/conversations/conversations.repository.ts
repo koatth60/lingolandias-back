@@ -55,6 +55,16 @@ export class ConversationsRepository {
     if (!requestingUserId || !(await this.isMember(conversationId, requestingUserId))) {
       throw new ForbiddenException('Not a member of this conversation');
     }
+    return this.getMembersUnchecked(conversationId);
+  }
+
+  // The membership check above is for the public "who's in this chat"
+  // endpoint. Internal callers (computeGroupName, run on every add/remove so
+  // the auto-generated name stays current) aren't a member lookup on behalf
+  // of a specific user — they need the roster regardless, so they use this
+  // directly instead of getMembers, which would otherwise 403 with no
+  // requestingUserId to check against.
+  private async getMembersUnchecked(conversationId: string) {
     const rows = await this.memberRepo.find({ where: { conversationId } });
     if (!rows.length) return [];
     const users = await this.userRepo.findBy({ id: In(rows.map((r) => r.userId)) });
@@ -304,7 +314,7 @@ export class ConversationsRepository {
   // Builds "Ana, Carlos, Dana" style names for groups that haven't been
   // manually renamed — recomputed whenever membership changes.
   private async computeGroupName(conversationId: string): Promise<string> {
-    const members = await this.getMembers(conversationId);
+    const members = await this.getMembersUnchecked(conversationId);
     const firstNames = members.map((m) => m.name).filter(Boolean);
     if (firstNames.length <= 4) return firstNames.join(', ') || 'Group Chat';
     return `${firstNames.slice(0, 3).join(', ')} +${firstNames.length - 3} more`;
