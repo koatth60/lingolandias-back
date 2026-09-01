@@ -34,6 +34,11 @@ export class Conversation {
   @Column({ type: 'boolean', default: false })
   linkedToSchedule: boolean;
 
+  // Once someone manually renames a group, stop auto-recomputing its name
+  // from the member list when membership changes.
+  @Column({ type: 'boolean', default: false })
+  nameIsCustom: boolean;
+
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;
 }

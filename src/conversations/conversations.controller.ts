@@ -19,9 +19,16 @@ export class ConversationsController {
   constructor(private readonly conversationsService: ConversationsService) {}
 
   @Get()
-  findUserConversations(@Query('userId') userId: string) {
+  findUserConversations(
+    @Query('userId') userId: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
     if (!userId) throw new BadRequestException('userId is required');
-    return this.conversationsService.findUserConversations(userId);
+    return this.conversationsService.findUserConversations(userId, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
   }
 
   @Get(':id/messages')
@@ -29,10 +36,12 @@ export class ConversationsController {
     @Param('id') id: string,
     @Query('before') before?: string,
     @Query('limit') limit?: string,
+    @Query('userId') userId?: string,
   ) {
     return this.conversationsService.getMessages(id, {
       before,
       limit: limit ? parseInt(limit, 10) : undefined,
+      userId,
     });
   }
 
@@ -71,9 +80,17 @@ export class ConversationsController {
   }
 
   @Post(':id/members')
-  addMember(@Param('id') id: string, @Body('userId') userId: string) {
-    if (!userId) throw new BadRequestException('userId is required');
-    return this.conversationsService.addMember(id, userId);
+  addMember(
+    @Param('id') id: string,
+    @Body() body: { userId: string; addedBy: string; shareHistory?: boolean },
+  ) {
+    if (!body?.userId || !body?.addedBy) {
+      throw new BadRequestException('userId and addedBy are required');
+    }
+    return this.conversationsService.addMember(id, body.userId, {
+      addedBy: body.addedBy,
+      shareHistory: !!body.shareHistory,
+    });
   }
 
   @Delete(':id/members/:userId')
@@ -87,5 +104,23 @@ export class ConversationsController {
     @Body() body: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean },
   ) {
     return this.conversationsService.renameGroup(id, body);
+  }
+
+  @Post(':id/pin')
+  setPinned(@Param('id') id: string, @Body() body: { userId: string; pinned: boolean }) {
+    if (!body?.userId) throw new BadRequestException('userId is required');
+    return this.conversationsService.setPinned(id, body.userId, !!body.pinned);
+  }
+
+  @Post(':id/mute')
+  setMuted(@Param('id') id: string, @Body() body: { userId: string; muted: boolean }) {
+    if (!body?.userId) throw new BadRequestException('userId is required');
+    return this.conversationsService.setMuted(id, body.userId, !!body.muted);
+  }
+
+  @Delete(':id')
+  deleteForMe(@Param('id') id: string, @Query('userId') userId: string) {
+    if (!userId) throw new BadRequestException('userId is required');
+    return this.conversationsService.deleteForMe(id, userId);
   }
 }

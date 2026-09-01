@@ -5,8 +5,8 @@ import { ConversationsRepository } from './conversations.repository';
 export class ConversationsService {
   constructor(private readonly conversationsRepository: ConversationsRepository) {}
 
-  findUserConversations(userId: string) {
-    return this.conversationsRepository.findUserConversations(userId);
+  findUserConversations(userId: string, opts?: { limit?: number; offset?: number }) {
+    return this.conversationsRepository.findUserConversations(userId, opts);
   }
 
   getMembers(conversationId: string) {
@@ -21,8 +21,8 @@ export class ConversationsService {
     return this.conversationsRepository.createGroup(params);
   }
 
-  addMember(conversationId: string, userId: string) {
-    return this.conversationsRepository.addMember(conversationId, userId);
+  addMember(conversationId: string, newUserId: string, opts: { addedBy: string; shareHistory: boolean }) {
+    return this.conversationsRepository.addMember(conversationId, newUserId, opts);
   }
 
   removeMember(conversationId: string, userId: string) {
@@ -33,7 +33,7 @@ export class ConversationsService {
     return this.conversationsRepository.renameGroup(conversationId, params);
   }
 
-  getMessages(conversationId: string, opts: { before?: string; limit?: number }) {
+  getMessages(conversationId: string, opts: { before?: string; limit?: number; userId?: string }) {
     return this.conversationsRepository.getMessages(conversationId, opts);
   }
 
@@ -43,5 +43,17 @@ export class ConversationsService {
 
   markRead(conversationId: string, userId: string) {
     return this.conversationsRepository.markRead(conversationId, userId);
+  }
+
+  setPinned(conversationId: string, userId: string, pinned: boolean) {
+    return this.conversationsRepository.setPinned(conversationId, userId, pinned);
+  }
+
+  setMuted(conversationId: string, userId: string, muted: boolean) {
+    return this.conversationsRepository.setMuted(conversationId, userId, muted);
+  }
+
+  deleteForMe(conversationId: string, userId: string) {
+    return this.conversationsRepository.deleteForMe(conversationId, userId);
   }
 }

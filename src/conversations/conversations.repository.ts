@@ -53,11 +53,11 @@ export class ConversationsRepository {
     return !!row;
   }
 
-  async findUserConversations(userId: string) {
+  async findUserConversations(userId: string, opts: { limit?: number; offset?: number } = {}) {
     const memberships = (await this.memberRepo.find({ where: { userId } })).filter(
       (m) => m.conversationId !== 'uuid-support',
     );
-    if (!memberships.length) return [];
+    if (!memberships.length) return { conversations: [], total: 0, hasMore: false };
 
     const conversationIds = memberships.map((m) => m.conversationId);
     const lastReadByConv = new Map(memberships.map((m) => [m.conversationId, m.lastReadAt]));
@@ -145,12 +145,16 @@ export class ConversationsRepository {
       : [];
     const unreadByConv = new Map(unreadRows.map((r: any) => [r.conversationId, r.count]));
 
-    return conversations
+    const membershipByConv = new Map(memberships.map((m) => [m.conversationId, m]));
+
+    const sorted = conversations
       .map((c) => {
         const otherUser = otherUserIdByConv.has(c.id) ? otherUserById.get(otherUserIdByConv.get(c.id)) : null;
         const lastMessage = lastMessageByConv.get(c.id);
         const fallbackName =
           c.type === 'dm' && !otherUser ? fallbackNameByConv.get(c.id) || 'Deleted user' : null;
+        const membership = membershipByConv.get(c.id);
+        const lastActivityAt = lastMessage?.timestamp || c.createdAt;
         return {
           id: c.id,
           type: c.type,
@@ -158,6 +162,8 @@ export class ConversationsRepository {
           avatarUrl: c.type === 'dm' ? otherUser?.avatarUrl : c.avatarUrl,
           language: c.language,
           linkedToSchedule: c.linkedToSchedule,
+          pinned: membership?.pinned || false,
+          muted: membership?.muted || false,
           otherUser: otherUser
             ? { id: otherUser.id, name: otherUser.name, lastName: otherUser.lastName, avatarUrl: otherUser.avatarUrl, online: otherUser.online, role: otherUser.role }
             : null,
@@ -169,11 +175,27 @@ export class ConversationsRepository {
                 timestamp: lastMessage.timestamp,
               }
             : null,
-          unreadCount: unreadByConv.get(c.id) || 0,
-          lastActivityAt: lastMessage?.timestamp || c.createdAt,
+          unreadCount: membership?.muted ? 0 : unreadByConv.get(c.id) || 0,
+          lastActivityAt,
+          // "Deleted for me" stays hidden only until new activity arrives —
+          // otherwise clearing a chat would silently swallow future messages.
+          _hidden: !!membership?.deletedAt && new Date(membership.deletedAt) >= new Date(lastActivityAt),
         };
       })
-      .sort((a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime());
+      .filter((c) => !c._hidden)
+      .map(({ _hidden, ...c }) => c)
+      .sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime();
+      });
+
+    const limit = opts.limit ?? 20;
+    const offset = opts.offset ?? 0;
+    return {
+      conversations: sorted.slice(offset, offset + limit),
+      total: sorted.length,
+      hasMore: offset + limit < sorted.length,
+    };
   }
 
   async findOrCreateDm(userId: string, otherUserId: string): Promise<Conversation> {
@@ -231,17 +253,61 @@ export class ConversationsRepository {
     });
   }
 
-  async addMember(conversationId: string, userId: string) {
+  // Builds "Ana, Carlos, Dana" style names for groups that haven't been
+  // manually renamed — recomputed whenever membership changes.
+  private async computeGroupName(conversationId: string): Promise<string> {
+    const members = await this.getMembers(conversationId);
+    const firstNames = members.map((m) => m.name).filter(Boolean);
+    if (firstNames.length <= 4) return firstNames.join(', ') || 'Group Chat';
+    return `${firstNames.slice(0, 3).join(', ')} +${firstNames.length - 3} more`;
+  }
+
+  // Adding a member is allowed on any dm/group conversation. Adding to a DM
+  // promotes it to a group (a DM structurally only ever has 2 members), since
+  // every chat should be able to grow the same way Teams lets you do it.
+  async addMember(
+    conversationId: string,
+    newUserId: string,
+    opts: { addedBy: string; shareHistory: boolean },
+  ) {
     const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
     if (!conversation) throw new NotFoundException('Conversation not found');
-    if (conversation.type !== 'group') throw new NotFoundException('Only groups support adding members');
-    const already = await this.isMember(conversationId, userId);
-    if (already) return;
-    await this.memberRepo.save({ conversationId, userId, role: 'member' });
+    if (!['dm', 'group'].includes(conversation.type)) {
+      throw new NotFoundException('Members can only be added to direct messages or groups');
+    }
+    const already = await this.isMember(conversationId, newUserId);
+    if (already) return conversation;
+
+    if (conversation.type === 'dm') {
+      conversation.type = 'group' as ConversationType;
+      conversation.createdBy = opts.addedBy;
+      await this.conversationRepo.save(conversation);
+      // The person who grew the DM into a group becomes its owner.
+      await this.memberRepo.update({ conversationId, userId: opts.addedBy }, { role: 'owner' });
+    }
+
+    await this.memberRepo.save({
+      conversationId,
+      userId: newUserId,
+      role: 'member',
+      historyVisibleFrom: opts.shareHistory ? null : new Date(),
+    });
+
+    const refreshed = await this.conversationRepo.findOneBy({ id: conversationId });
+    if (!refreshed.nameIsCustom) {
+      refreshed.name = await this.computeGroupName(conversationId);
+      await this.conversationRepo.save(refreshed);
+    }
+    return refreshed;
   }
 
   async removeMember(conversationId: string, userId: string) {
     await this.memberRepo.delete({ conversationId, userId });
+    const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
+    if (conversation && conversation.type === 'group' && !conversation.nameIsCustom) {
+      conversation.name = await this.computeGroupName(conversationId);
+      await this.conversationRepo.save(conversation);
+    }
   }
 
   async renameGroup(
@@ -251,20 +317,48 @@ export class ConversationsRepository {
     const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
     if (!conversation) throw new NotFoundException('Conversation not found');
     if (conversation.type !== 'group') throw new NotFoundException('Only groups can be renamed');
-    if (params.name?.trim()) conversation.name = params.name.trim();
+    if (params.name?.trim()) {
+      conversation.name = params.name.trim();
+      conversation.nameIsCustom = true;
+    }
     if (params.avatarUrl !== undefined) conversation.avatarUrl = params.avatarUrl;
     if (params.linkedToSchedule !== undefined) conversation.linkedToSchedule = params.linkedToSchedule;
     return this.conversationRepo.save(conversation);
   }
 
-  async getMessages(conversationId: string, opts: { before?: string; limit?: number }) {
+  async setPinned(conversationId: string, userId: string, pinned: boolean) {
+    await this.memberRepo.update({ conversationId, userId }, { pinned });
+  }
+
+  async setMuted(conversationId: string, userId: string, muted: boolean) {
+    await this.memberRepo.update({ conversationId, userId }, { muted });
+  }
+
+  // "Delete for me" — Teams-style: only clears it from this person's own
+  // list. Reappears automatically once new activity arrives (see the
+  // deletedAt filter in findUserConversations).
+  async deleteForMe(conversationId: string, userId: string) {
+    await this.memberRepo.update({ conversationId, userId }, { deletedAt: new Date() });
+  }
+
+  async getMessages(conversationId: string, opts: { before?: string; limit?: number; userId?: string }) {
     const limit = Math.min(opts.limit || 50, 100);
+
+    // If this member joined without inheriting prior history, don't show
+    // anything from before they joined.
+    let historyFloor: Date | undefined;
+    if (opts.userId) {
+      const membership = await this.memberRepo.findOneBy({ conversationId, userId: opts.userId });
+      historyFloor = membership?.historyVisibleFrom || undefined;
+    }
+
     const qb = this.messageRepo
       .createQueryBuilder('m')
       .where('m.conversationId = :conversationId', { conversationId })
       .orderBy('m.timestamp', 'DESC')
       .addOrderBy('m.id', 'DESC')
       .take(limit);
+    if (historyFloor) qb.andWhere('m.timestamp >= :historyFloor', { historyFloor });
 
     let cursor: { timestamp: Date; id: string } | undefined;
     if (opts.before) {
@@ -288,6 +382,7 @@ export class ConversationsRepository {
         .orderBy('am.timestamp', 'DESC')
         .addOrderBy('am.id', 'DESC')
         .take(remaining);
+      if (historyFloor) archQb.andWhere('am.timestamp >= :historyFloor', { historyFloor });
 
       const archCursor = messages.length
         ? { timestamp: messages[messages.length - 1].timestamp, id: messages[messages.length - 1].id }
