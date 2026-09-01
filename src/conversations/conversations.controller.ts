@@ -45,6 +45,12 @@ export class ConversationsController {
     });
   }
 
+  @Get(':id/admin-messages')
+  getMessagesAsAdmin(@Param('id') id: string, @Query('requesterId') requesterId: string) {
+    if (!requesterId) throw new BadRequestException('requesterId is required');
+    return this.conversationsService.getMessagesAsAdmin(id, requesterId);
+  }
+
   @Get(':id/members')
   getMembers(@Param('id') id: string, @Query('userId') userId: string) {
     return this.conversationsService.getMembers(id, userId);

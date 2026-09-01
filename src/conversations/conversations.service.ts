@@ -41,6 +41,10 @@ export class ConversationsService {
     return this.conversationsRepository.getMessages(conversationId, opts);
   }
 
+  getMessagesAsAdmin(conversationId: string, requesterId: string) {
+    return this.conversationsRepository.getMessagesAsAdmin(conversationId, requesterId);
+  }
+
   getArchivedMessages(conversationId: string, page: number) {
     return this.conversationsRepository.getArchivedMessages(conversationId, page);
   }

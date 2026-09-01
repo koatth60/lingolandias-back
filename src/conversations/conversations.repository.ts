@@ -397,6 +397,23 @@ export class ConversationsRepository {
     return memberIds;
   }
 
+  // Admin "observe a class" chat viewer — deliberately bypasses the
+  // membership check getMessages enforces below, since an admin isn't a
+  // participant in every private class conversation they need to be able
+  // to review. Trust boundary is the requester's own role (looked up
+  // server-side, not just claimed by the client) rather than membership.
+  async getMessagesAsAdmin(conversationId: string, requesterId: string) {
+    const requester = await this.userRepo.findOneBy({ id: requesterId });
+    if (!requester || requester.role !== 'admin') {
+      throw new ForbiddenException('Admin access required');
+    }
+    return this.messageRepo.find({
+      where: { conversationId },
+      order: { timestamp: 'DESC' },
+      take: 100,
+    });
+  }
+
   async getMessages(conversationId: string, opts: { before?: string; limit?: number; userId?: string }) {
     const limit = Math.min(opts.limit || 50, 100);
 
