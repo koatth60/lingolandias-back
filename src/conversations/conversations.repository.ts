@@ -46,6 +46,36 @@ export class ConversationsRepository {
     );
   }
 
+  // Recomputes coTeacherIds for a linked room's Schedule rows to exactly
+  // "current teacher members minus whoever owns the class" — called
+  // whenever group membership changes (add/remove) so a teacher added
+  // alongside the real students automatically sees the class on their own
+  // calendar too, without needing a Schedule row of their own (which would
+  // require a fake studentId). No-op if the room has no Schedule rows yet
+  // (not linked to a class).
+  async syncCoTeachers(conversationId: string) {
+    const existing = await this.scheduleRepo.find({ where: { roomId: conversationId } });
+    if (!existing.length) return;
+    const primaryTeacherId = existing[0].teacherId;
+    const members = await this.getMembersUnchecked(conversationId);
+    const coTeacherIds = members
+      .filter((m) => m.role === 'teacher' && m.id !== primaryTeacherId)
+      .map((m) => m.id);
+    await this.scheduleRepo.update(
+      { roomId: conversationId },
+      { coTeacherIds: coTeacherIds.length ? coTeacherIds : null },
+    );
+    const updated = await this.scheduleRepo.find({ where: { roomId: conversationId } });
+    updated.forEach((row) =>
+      this.scheduleBroadcaster.notifyScheduleUpdated({
+        studentId: row.studentId,
+        teacherId: row.teacherId,
+        action: 'modify',
+        schedule: row,
+      }),
+    );
+  }
+
   async getMemberIds(conversationId: string): Promise<string[]> {
     const rows = await this.memberRepo.find({ where: { conversationId } });
     return rows.map((r) => r.userId);
@@ -359,6 +389,10 @@ export class ConversationsRepository {
     if (refreshed.linkedToSchedule) {
       await this.scheduleRepo.update({ roomId: conversationId }, { groupName: refreshed.name });
       await this.broadcastRoomRename(conversationId);
+      // Covers a teacher being added alongside real students — they get no
+      // Schedule row of their own (studentId must be an actual student) but
+      // should still see the class on their own calendar as a co-teacher.
+      await this.syncCoTeachers(conversationId);
     }
     return refreshed;
   }
@@ -389,6 +423,9 @@ export class ConversationsRepository {
           eventIds: removedRows.map((r) => r.id),
         });
       }
+      // Also drops the departed member from coTeacherIds if they were a
+      // co-teacher rather than a student — harmless no-op otherwise.
+      await this.syncCoTeachers(conversationId);
     }
     if (conversation.type === 'group' && !conversation.nameIsCustom) {
       conversation.name = await this.computeGroupName(conversationId);

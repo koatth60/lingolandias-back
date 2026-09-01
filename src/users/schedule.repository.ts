@@ -39,6 +39,24 @@ export class ScheduleRepository {
     return this.repository.find({ where: { teacherId, studentId } });
   }
 
+  // Classes where this teacher isn't the owner (teacherId) but is listed as
+  // a co-teacher/guest — jsonb containment, so it needs a raw query builder
+  // condition rather than a plain `where`.
+  async findCoTeaching(teacherId: string): Promise<Schedule[]> {
+    return this.repository
+      .createQueryBuilder('s')
+      .where(`s."coTeacherIds" @> :id::jsonb`, { id: JSON.stringify([teacherId]) })
+      .getMany();
+  }
+
+  // Recomputes/persists coTeacherIds for every row sharing a room — used
+  // whenever group membership changes so the set stays exactly "current
+  // teacher members minus whoever owns the class."
+  async setCoTeachers(roomId: string, coTeacherIds: string[]): Promise<Schedule[]> {
+    await this.repository.update({ roomId }, { coTeacherIds: coTeacherIds.length ? coTeacherIds : null });
+    return this.repository.find({ where: { roomId } });
+  }
+
   async createGroupSchedule(params: {
     teacherId: string;
     teacherName: string;

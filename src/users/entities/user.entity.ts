@@ -180,4 +180,13 @@ export class Schedule {
   // title" for a 3+ person class. Null for every normal 1:1 class.
   @Column({ type: 'varchar', nullable: true })
   groupName?: string;
+
+  // Other teachers who are members of the linked group chat but aren't the
+  // owning teacher (teacherId) — they still see this class on their own
+  // calendar (as a guest/co-teacher) even though there's no Schedule row of
+  // their own, since a row's studentId can only ever be an actual student.
+  // Kept in sync with the group's membership by
+  // ConversationsRepository.syncCoTeachers — never edited directly.
+  @Column({ type: 'jsonb', nullable: true })
+  coTeacherIds?: string[] | null;
 }

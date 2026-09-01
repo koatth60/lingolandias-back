@@ -149,7 +149,11 @@ export class UsersService {
   async getTeacherProfile(teacherId: string) {
     const user = await this.usersRepository.findById(teacherId);
     if (!user) throw new NotFoundException('Teacher not found');
-    return { teacherSchedules: user.teacherSchedules };
+    // Classes this teacher owns (teacherId) plus classes they're a
+    // co-teacher/guest on (coTeacherIds) — the relation used above only
+    // ever covers the former.
+    const coTeaching = await this.scheduleRepository.findCoTeaching(teacherId);
+    return { teacherSchedules: [...(user.teacherSchedules || []), ...coTeaching] };
   }
 
   async getAdminStats() {
@@ -241,6 +245,9 @@ export class UsersService {
     });
 
     await this.conversationsService.renameGroup(body.conversationId, { linkedToSchedule: true });
+    // Picks up any teachers who were already members of this group before it
+    // got scheduled — they see the class on their own calendar too now.
+    await this.conversationsService.syncCoTeachers(body.conversationId);
 
     savedSchedules.forEach((schedule) => {
       this.gateway.notifyScheduleUpdated({ studentId: schedule.studentId, action: 'add', schedule });
@@ -309,6 +316,7 @@ export class UsersService {
       linkedToSchedule: true,
       ...(body.groupName ? { name: body.groupName } : {}),
     });
+    await this.conversationsService.syncCoTeachers(roomId);
 
     newRows.forEach((schedule) => {
       this.gateway.notifyScheduleUpdated({ studentId: schedule.studentId, action: 'add', schedule });

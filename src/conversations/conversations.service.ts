@@ -72,4 +72,8 @@ export class ConversationsService {
   deleteGroup(conversationId: string, requesterId: string) {
     return this.conversationsRepository.deleteGroup(conversationId, requesterId);
   }
+
+  syncCoTeachers(conversationId: string) {
+    return this.conversationsRepository.syncCoTeachers(conversationId);
+  }
 }
