@@ -215,10 +215,12 @@ export class ConversationsRepository {
     };
   }
 
-  async findOrCreateDm(userId: string, otherUserId: string): Promise<Conversation> {
-    if (userId === otherUserId) {
-      throw new NotFoundException('Cannot start a conversation with yourself');
-    }
+  // Read-only half of findOrCreateDm below — used so the client can check
+  // "do I already have a conversation with this person" (e.g. clicking their
+  // name from a group's member list) without side effects. Creating one
+  // eagerly on every click, even from findOrCreateDm, would resurrect the
+  // exact "phantom empty chat" bug the draft-DM flow was built to avoid.
+  async findExistingDm(userId: string, otherUserId: string): Promise<Conversation | null> {
     const existing = await this.dataSource.query(
       `SELECT c.* FROM conversations c
        JOIN conversation_members m1 ON m1."conversationId" = c.id AND m1."userId" = $1
@@ -227,7 +229,15 @@ export class ConversationsRepository {
        LIMIT 1`,
       [userId, otherUserId],
     );
-    if (existing.length) return existing[0];
+    return existing.length ? existing[0] : null;
+  }
+
+  async findOrCreateDm(userId: string, otherUserId: string): Promise<Conversation> {
+    if (userId === otherUserId) {
+      throw new NotFoundException('Cannot start a conversation with yourself');
+    }
+    const existing = await this.findExistingDm(userId, otherUserId);
+    if (existing) return existing;
 
     const id = randomUUID();
     return this.dataSource.transaction(async (manager) => {
@@ -356,6 +366,35 @@ export class ConversationsRepository {
   // deletedAt filter in findUserConversations).
   async deleteForMe(conversationId: string, userId: string) {
     await this.memberRepo.update({ conversationId, userId }, { deletedAt: new Date() });
+  }
+
+  // Hard-deletes a group for every member, not just the requester — any
+  // member can do this today. `linkedToSchedule` groups are excluded because
+  // those are meant to be created/managed by a teacher through the (not yet
+  // wired) scheduling flow; once that exists it should own its own delete
+  // path instead of any member being able to unilaterally wipe it.
+  async deleteGroup(conversationId: string, requesterId: string): Promise<string[]> {
+    const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
+    if (!conversation) throw new NotFoundException('Conversation not found');
+    if (conversation.type !== 'group') {
+      throw new ForbiddenException('Only groups can be deleted this way');
+    }
+    if (conversation.linkedToSchedule) {
+      throw new ForbiddenException('This group is managed by its scheduled class and cannot be deleted here');
+    }
+    const isRequesterMember = await this.isMember(conversationId, requesterId);
+    if (!isRequesterMember) {
+      throw new ForbiddenException('Only a member of this group can delete it');
+    }
+
+    const memberIds = await this.getMemberIds(conversationId);
+    await this.dataSource.transaction(async (manager) => {
+      await manager.delete(ArchivedMessage, { conversationId });
+      await manager.delete(Message, { conversationId });
+      await manager.delete(ConversationMember, { conversationId });
+      await manager.delete(Conversation, { id: conversationId });
+    });
+    return memberIds;
   }
 
   async getMessages(conversationId: string, opts: { before?: string; limit?: number; userId?: string }) {

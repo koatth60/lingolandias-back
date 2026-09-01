@@ -69,6 +69,20 @@ export class ConversationsController {
     return this.conversationsService.findOrCreateDm(body.userId, body.otherUserId);
   }
 
+  // Read-only lookup so the client can open an existing DM's real history
+  // directly instead of always starting a fresh draft — see startDmWith in
+  // messages.jsx. Always wrapped in an object (never a bare value) because
+  // Nest/Express sends a bare `null` return as a zero-byte body, which
+  // `res.json()` on the client throws on rather than parsing as null.
+  @Get('dm/existing')
+  async findExistingDm(@Query('userId') userId: string, @Query('otherUserId') otherUserId: string) {
+    if (!userId || !otherUserId) {
+      throw new BadRequestException('userId and otherUserId are required');
+    }
+    const conversation = await this.conversationsService.findExistingDm(userId, otherUserId);
+    return { conversation };
+  }
+
   @Post('group')
   createGroup(
     @Body() body: { createdBy: string; name: string; avatarUrl?: string; memberIds: string[] },
@@ -122,5 +136,14 @@ export class ConversationsController {
   deleteForMe(@Param('id') id: string, @Query('userId') userId: string) {
     if (!userId) throw new BadRequestException('userId is required');
     return this.conversationsService.deleteForMe(id, userId);
+  }
+
+  // Hard-deletes the group for every member — distinct from deleteForMe
+  // above, which only hides a conversation from the requester's own list.
+  @Delete(':id/group')
+  async deleteGroup(@Param('id') id: string, @Query('userId') userId: string) {
+    if (!userId) throw new BadRequestException('userId is required');
+    const memberIds = await this.conversationsService.deleteGroup(id, userId);
+    return { deleted: true, memberIds };
   }
 }

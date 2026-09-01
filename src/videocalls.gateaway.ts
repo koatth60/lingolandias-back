@@ -747,6 +747,20 @@ export class VideoCallsGateway
     } catch (_) {}
   }
 
+  // Fired by the client that just hard-deleted a group (see DELETE
+  // /conversations/:id/group) so every OTHER member's chat list drops it
+  // live instead of only updating for whoever clicked delete.
+  @SubscribeMessage('conversationDeleted')
+  async handleConversationDeleted(
+    socket: Socket,
+    data: { conversationId: string; memberIds: string[] },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) return;
+      this.emitToUsers(data.memberIds, 'newConversation', { conversationId: data.conversationId });
+    } catch (_) {}
+  }
+
   private getCounterField(room: string): CounterField {
     if (room === 'uuid-support') return 'supportRoom';
     if (room.startsWith('uuid-teacher-')) {

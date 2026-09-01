@@ -17,6 +17,10 @@ export class ConversationsService {
     return this.conversationsRepository.findOrCreateDm(userId, otherUserId);
   }
 
+  findExistingDm(userId: string, otherUserId: string) {
+    return this.conversationsRepository.findExistingDm(userId, otherUserId);
+  }
+
   createGroup(params: { createdBy: string; name: string; avatarUrl?: string; memberIds: string[] }) {
     return this.conversationsRepository.createGroup(params);
   }
@@ -55,5 +59,9 @@ export class ConversationsService {
 
   deleteForMe(conversationId: string, userId: string) {
     return this.conversationsRepository.deleteForMe(conversationId, userId);
+  }
+
+  deleteGroup(conversationId: string, requesterId: string) {
+    return this.conversationsRepository.deleteGroup(conversationId, requesterId);
   }
 }
