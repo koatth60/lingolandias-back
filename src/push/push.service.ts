@@ -73,7 +73,10 @@ export class PushService {
     const subscription = await this.subscriptionRepository.findOne({
       where: { userId },
     });
-    if (!subscription) return;
+    if (!subscription) {
+      this.logger.warn(`[push] no subscription for userId=${userId}, skipping "${title}"`);
+      return;
+    }
 
     const pushSubscription = {
       endpoint: subscription.endpoint,
@@ -85,6 +88,7 @@ export class PushService {
         pushSubscription,
         JSON.stringify({ title, body, icon: '/logo.png', url }),
       );
+      this.logger.warn(`[push] sent "${title}" to userId=${userId} endpoint=${subscription.endpoint.slice(0, 60)}...`);
     } catch (err) {
       this.logger.error(
         `Push failed for user ${userId}: status=${err.statusCode} body=${JSON.stringify(err.body)}`,
