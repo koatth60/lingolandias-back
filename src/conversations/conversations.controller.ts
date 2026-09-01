@@ -46,8 +46,8 @@ export class ConversationsController {
   }
 
   @Get(':id/members')
-  getMembers(@Param('id') id: string) {
-    return this.conversationsService.getMembers(id);
+  getMembers(@Param('id') id: string, @Query('userId') userId: string) {
+    return this.conversationsService.getMembers(id, userId);
   }
 
   @Get(':id/archived-messages')

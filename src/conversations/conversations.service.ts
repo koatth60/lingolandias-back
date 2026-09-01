@@ -9,8 +9,8 @@ export class ConversationsService {
     return this.conversationsRepository.findUserConversations(userId, opts);
   }
 
-  getMembers(conversationId: string) {
-    return this.conversationsRepository.getMembers(conversationId);
+  getMembers(conversationId: string, requestingUserId?: string) {
+    return this.conversationsRepository.getMembers(conversationId, requestingUserId);
   }
 
   findOrCreateDm(userId: string, otherUserId: string) {

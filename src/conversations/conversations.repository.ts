@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -30,7 +30,10 @@ export class ConversationsRepository {
     return rows.map((r) => r.userId);
   }
 
-  async getMembers(conversationId: string) {
+  async getMembers(conversationId: string, requestingUserId?: string) {
+    if (!requestingUserId || !(await this.isMember(conversationId, requestingUserId))) {
+      throw new ForbiddenException('Not a member of this conversation');
+    }
     const rows = await this.memberRepo.find({ where: { conversationId } });
     if (!rows.length) return [];
     const users = await this.userRepo.findBy({ id: In(rows.map((r) => r.userId)) });
@@ -51,6 +54,16 @@ export class ConversationsRepository {
   async isMember(conversationId: string, userId: string): Promise<boolean> {
     const row = await this.memberRepo.findOne({ where: { conversationId, userId } });
     return !!row;
+  }
+
+  // Socket room ids are shared between real conversations and ad-hoc video
+  // call rooms that never became a Conversation row. Only enforce membership
+  // when the id actually is a tracked conversation — otherwise every video
+  // call join would incorrectly get rejected.
+  async canJoinRoom(conversationId: string, userId: string): Promise<boolean> {
+    const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
+    if (!conversation) return true;
+    return this.isMember(conversationId, userId);
   }
 
   async findUserConversations(userId: string, opts: { limit?: number; offset?: number } = {}) {
@@ -348,13 +361,21 @@ export class ConversationsRepository {
   async getMessages(conversationId: string, opts: { before?: string; limit?: number; userId?: string }) {
     const limit = Math.min(opts.limit || 50, 100);
 
-    // If this member joined without inheriting prior history, don't show
-    // anything from before they joined.
-    let historyFloor: Date | undefined;
-    if (opts.userId) {
-      const membership = await this.memberRepo.findOneBy({ conversationId, userId: opts.userId });
-      historyFloor = membership?.historyVisibleFrom || undefined;
+    // Some legacy DM conversations were migrated with their id set to one of
+    // the two participants' own userId (see migration 001), so a raw
+    // conversationId can collide with a real user's id. Without this check,
+    // anyone who learns another user's id (trivial — it's shown all over the
+    // UI) could read a conversation they were never added to just by
+    // requesting it by that id. Membership is mandatory, not just used to
+    // compute a history floor.
+    if (!opts.userId) {
+      throw new ForbiddenException('userId is required to read conversation messages');
     }
+    const membership = await this.memberRepo.findOneBy({ conversationId, userId: opts.userId });
+    if (!membership) {
+      throw new ForbiddenException('Not a member of this conversation');
+    }
+    const historyFloor: Date | undefined = membership.historyVisibleFrom || undefined;
 
     const qb = this.messageRepo
       .createQueryBuilder('m')

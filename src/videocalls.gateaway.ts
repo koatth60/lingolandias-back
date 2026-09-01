@@ -237,11 +237,20 @@ export class VideoCallsGateway
   }
 
   @SubscribeMessage('join')
-  handleJoinRoom(socket: Socket, data: { username: string; room: string }) {
+  async handleJoinRoom(socket: Socket, data: { username: string; room: string }) {
     try {
       if (!this.isValidRoom(data.room)) return;
 
       const userId = this.socketToUser.get(socket.id);
+      // Legacy DM conversations were migrated with their id set to one of
+      // the participants' own userId, so a raw room string can collide with
+      // a real conversation. Block joining any tracked conversation the
+      // caller isn't actually a member of (video-call rooms that aren't
+      // Conversation rows are unaffected).
+      if (!userId || !(await this.conversationsRepository.canJoinRoom(data.room, userId))) {
+        socket.emit('chatError', { reason: 'not_a_member' });
+        return;
+      }
       if (userId) {
         if (!this.roomMembers.has(data.room)) {
           this.roomMembers.set(data.room, new Set());
@@ -281,6 +290,11 @@ export class VideoCallsGateway
   async handleGetRoomMembers(socket: Socket, data: { room: string }) {
     try {
       if (!this.isValidRoom(data.room)) {
+        socket.emit('roomMembers', { room: data.room, members: [] });
+        return;
+      }
+      const userId = this.socketToUser.get(socket.id);
+      if (!userId || !(await this.conversationsRepository.canJoinRoom(data.room, userId))) {
         socket.emit('roomMembers', { room: data.room, members: [] });
         return;
       }
