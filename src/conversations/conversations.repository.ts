@@ -624,12 +624,24 @@ export class ConversationsRepository {
     return this.messageRepo.save(message);
   }
 
-  async editMessage(id: string, message: string) {
-    await this.messageRepo.update(id, { message, editedAt: new Date() });
+  async editMessage(id: string, message: string, editedAt: Date = new Date()) {
+    await this.messageRepo.update(id, { message, editedAt });
   }
 
   async deleteMessage(id: string) {
     await this.messageRepo.delete(id);
+  }
+
+  async toggleReaction(messageId: string, userId: string, emoji: string): Promise<Record<string, string[]>> {
+    const msg = await this.messageRepo.findOneBy({ id: messageId });
+    if (!msg) return {};
+    const reactions: Record<string, string[]> = { ...(msg.reactions || {}) };
+    const current = reactions[emoji] || [];
+    const next = current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId];
+    if (next.length) reactions[emoji] = next;
+    else delete reactions[emoji];
+    await this.messageRepo.update(messageId, { reactions });
+    return reactions;
   }
 
   async markRead(conversationId: string, userId: string) {

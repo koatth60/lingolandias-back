@@ -750,10 +750,12 @@ export class VideoCallsGateway
       if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.conversationId)) return;
       const safe = this.sanitizeMessage(data.newMessage);
       if (!safe.trim()) return;
-      await this.conversationsRepository.editMessage(data.messageId, safe);
+      const editedAt = new Date();
+      await this.conversationsRepository.editMessage(data.messageId, safe, editedAt);
       this.server.to(data.conversationId).emit('conversationMessageEdited', {
         messageId: data.messageId,
         newMessage: safe,
+        editedAt,
       });
     } catch (_) {}
   }
@@ -769,6 +771,29 @@ export class VideoCallsGateway
       await this.conversationsRepository.deleteMessage(data.messageId);
       this.server.to(data.conversationId).emit('conversationMessageDeleted', {
         messageId: data.messageId,
+      });
+    } catch (_) {}
+  }
+
+  @SubscribeMessage('toggleReaction')
+  async handleToggleReaction(
+    socket: Socket,
+    data: { conversationId: string; messageId: string; emoji: string },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.conversationId)) return;
+      const userId = this.resolveSocketUserId(socket);
+      if (!userId) return;
+      const isMember = await this.conversationsRepository.isMember(data.conversationId, userId);
+      if (!isMember) return;
+      const emoji = (data.emoji || '').trim().slice(0, 8);
+      if (!emoji) return;
+      const reactions = await this.conversationsRepository.toggleReaction(data.messageId, userId, emoji);
+      this.server.to(data.conversationId).emit('messageReactionUpdated', {
+        conversationId: data.conversationId,
+        messageId: data.messageId,
+        reactions,
       });
     } catch (_) {}
   }
