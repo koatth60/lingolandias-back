@@ -259,6 +259,18 @@ export class UsersService {
     if (!rows.length) {
       rows = await this.scheduleRepository.findLegacyOneOnOne(params.teacherId, params.otherUserId);
     }
+    // Catches a class this pair already has via some OTHER group's room —
+    // findLegacyOneOnOne alone only sees never-linked (roomId IS NULL)
+    // classes, so a class scheduled through a group would otherwise be
+    // missed here and get offered again from a fresh 1:1 DM. Only applied
+    // when the caller has no conversationId of their own (the "opening a
+    // fresh DM" check) — when adding a member to a *specific* group,
+    // discovering this pair has an unrelated class elsewhere must NOT make
+    // that other group's roomId get returned here, or "add to class" would
+    // wire the new member into the wrong class entirely.
+    if (!rows.length && !params.conversationId) {
+      rows = await this.scheduleRepository.findAnyForPair(params.teacherId, params.otherUserId);
+    }
     if (!rows.length) return { linked: false };
     return { linked: true, roomId: rows[0].roomId || params.conversationId, groupName: rows[0].groupName || null };
   }

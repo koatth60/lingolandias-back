@@ -30,6 +30,15 @@ export class ScheduleRepository {
     return this.repository.find({ where: { teacherId, studentId, roomId: IsNull() } });
   }
 
+  // Broader than findLegacyOneOnOne — any class this pair has together at
+  // all, room-linked or not. Used to decide "does this teacher/student pair
+  // already have a class" (e.g. before offering to schedule one from a fresh
+  // DM) where a group-scheduled class — which always has a real roomId —
+  // should count too, not just an unlinked legacy 1:1.
+  async findAnyForPair(teacherId: string, studentId: string): Promise<Schedule[]> {
+    return this.repository.find({ where: { teacherId, studentId } });
+  }
+
   async createGroupSchedule(params: {
     teacherId: string;
     teacherName: string;
