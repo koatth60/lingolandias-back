@@ -778,7 +778,7 @@ export class VideoCallsGateway
   @SubscribeMessage('toggleReaction')
   async handleToggleReaction(
     socket: Socket,
-    data: { conversationId: string; messageId: string; emoji: string },
+    data: { conversationId: string; messageId: string; emoji: string; userName?: string },
   ) {
     try {
       if (!this.isAuthenticated(socket)) return;
@@ -789,7 +789,8 @@ export class VideoCallsGateway
       if (!isMember) return;
       const emoji = (data.emoji || '').trim().slice(0, 8);
       if (!emoji) return;
-      const reactions = await this.conversationsRepository.toggleReaction(data.messageId, userId, emoji);
+      const userName = (data.userName || '').trim().slice(0, 100) || 'Someone';
+      const reactions = await this.conversationsRepository.toggleReaction(data.messageId, userId, userName, emoji);
       this.server.to(data.conversationId).emit('messageReactionUpdated', {
         conversationId: data.conversationId,
         messageId: data.messageId,

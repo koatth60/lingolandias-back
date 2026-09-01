@@ -38,7 +38,7 @@ export class ArchivedMessage {
   replyTo?: { id: string; message: string; username: string } | null;
 
   @Column({ type: 'jsonb', nullable: true })
-  reactions?: Record<string, string[]> | null;
+  reactions?: Record<string, { id: string; name: string }[]> | null;
 
   @Column({ type: 'timestamp' })
   timestamp: Date;

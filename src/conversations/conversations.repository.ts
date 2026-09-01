@@ -632,12 +632,18 @@ export class ConversationsRepository {
     await this.messageRepo.delete(id);
   }
 
-  async toggleReaction(messageId: string, userId: string, emoji: string): Promise<Record<string, string[]>> {
+  async toggleReaction(
+    messageId: string,
+    userId: string,
+    userName: string,
+    emoji: string,
+  ): Promise<Record<string, { id: string; name: string }[]>> {
     const msg = await this.messageRepo.findOneBy({ id: messageId });
     if (!msg) return {};
-    const reactions: Record<string, string[]> = { ...(msg.reactions || {}) };
+    const reactions: Record<string, { id: string; name: string }[]> = { ...(msg.reactions || {}) };
     const current = reactions[emoji] || [];
-    const next = current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId];
+    const already = current.some((r) => r.id === userId);
+    const next = already ? current.filter((r) => r.id !== userId) : [...current, { id: userId, name: userName }];
     if (next.length) reactions[emoji] = next;
     else delete reactions[emoji];
     await this.messageRepo.update(messageId, { reactions });

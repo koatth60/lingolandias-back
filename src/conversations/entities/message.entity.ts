@@ -43,10 +43,11 @@ export class Message {
   @Column({ type: 'jsonb', nullable: true })
   replyTo?: { id: string; message: string; username: string } | null;
 
-  // Emoji -> array of userIds who reacted with it. An emoji key is removed
-  // once its array is empty rather than kept around as [].
+  // Emoji -> who reacted with it (id + display name, so a hover tooltip can
+  // show names without a separate member-list lookup). An emoji key is
+  // removed once its array is empty rather than kept around as [].
   @Column({ type: 'jsonb', nullable: true })
-  reactions?: Record<string, string[]> | null;
+  reactions?: Record<string, { id: string; name: string }[]> | null;
 
   // 'text' (default/omitted) or 'missed_call' — the latter renders with a
   // distinct look + a Join button in the client instead of as a normal
