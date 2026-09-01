@@ -45,7 +45,7 @@ export class ConversationsRepository {
         return {
           id: u.id, name: u.name, lastName: u.lastName, email: u.email,
           avatarUrl: u.avatarUrl, role: u.role, online: u.online,
-          memberRole: r.role,
+          memberRole: r.role, lastReadAt: r.lastReadAt,
         };
       })
       .filter(Boolean);

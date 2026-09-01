@@ -666,6 +666,30 @@ export class VideoCallsGateway
     }
   }
 
+  @SubscribeMessage('markConversationRead')
+  async handleMarkConversationRead(
+    socket: Socket,
+    data: { conversationId: string; userId: string },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidRoom(data.conversationId)) return;
+      const isMember = await this.conversationsRepository.isMember(data.conversationId, data.userId);
+      if (!isMember) return;
+      const readAt = new Date();
+      await this.conversationsRepository.markRead(data.conversationId, data.userId);
+      // Broadcast so the sender's open chat window can flip their message to
+      // "read" live, the way Teams/WhatsApp do — everyone in the room gets
+      // this, including the reader themselves, which is harmless (their own
+      // read state doesn't render anything).
+      this.server.to(data.conversationId).emit('conversationRead', {
+        conversationId: data.conversationId,
+        userId: data.userId,
+        readAt,
+      });
+    } catch (_) {}
+  }
+
   @SubscribeMessage('editConversationMessage')
   async handleEditConversationMessage(
     socket: Socket,
