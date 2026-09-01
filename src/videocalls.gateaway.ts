@@ -4,6 +4,7 @@ import {
   WebSocketServer,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { ChatsRepository } from './chat/chats.repository';
@@ -25,6 +26,7 @@ import { User } from './users/entities/user.entity';
 import { JwtService } from '@nestjs/jwt';
 import { ConversationsRepository } from './conversations/conversations.repository';
 import { PushService } from './push/push.service';
+import { ScheduleBroadcaster } from './gateway/schedule-broadcaster.service';
 
 const MAX_MESSAGE_LENGTH = 4000;
 const RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
@@ -37,7 +39,7 @@ const RATE_LIMIT_MAX = 20;           // max messages per window
   },
 })
 export class VideoCallsGateway
-  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
+  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit, OnGatewayInit
 {
   private readonly logger = new Logger(VideoCallsGateway.name);
 
@@ -73,12 +75,20 @@ export class VideoCallsGateway
     private readonly userRepo: Repository<User>,
     private readonly conversationsRepository: ConversationsRepository,
     private readonly pushService: PushService,
+    private readonly scheduleBroadcaster: ScheduleBroadcaster,
   ) {}
 
   async onModuleInit() {
     try {
       await this.userRepo.update({} as any, { online: 'offline' } as any);
     } catch (_) {}
+  }
+
+  // Hands ConversationsRepository a way to push live schedule updates (class
+  // renamed, member added/removed) without importing this whole gateway —
+  // see ScheduleBroadcaster's own comment for why this indirection exists.
+  afterInit(server: Server) {
+    this.scheduleBroadcaster.attach(server);
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

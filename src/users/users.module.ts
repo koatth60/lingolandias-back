@@ -8,11 +8,13 @@ import { UsersRepository } from './users.repository';
 import { ScheduleRepository } from './schedule.repository';
 import { UnreadGlobalMessage } from 'src/chat/entities/unread-global-messages.entity';
 import { GatewayModule } from 'src/gateway/gateway.module';
+import { ConversationsModule } from 'src/conversations/conversations.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Schedule, UnreadGlobalMessage, Settings]),
     GatewayModule,
+    ConversationsModule,
   ],
 
   controllers: [UsersController],

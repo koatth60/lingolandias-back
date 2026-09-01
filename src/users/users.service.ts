@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { UsersRepository } from './users.repository';
 import { ScheduleRepository } from './schedule.repository';
 import { VideoCallsGateway } from 'src/videocalls.gateaway';
+import { ConversationsService } from 'src/conversations/conversations.service';
 
 @Injectable()
 export class UsersService {
@@ -9,7 +10,16 @@ export class UsersService {
     private readonly usersRepository: UsersRepository,
     private readonly scheduleRepository: ScheduleRepository,
     private readonly gateway: VideoCallsGateway,
+    private readonly conversationsService: ConversationsService,
   ) {}
+
+  private async requireTeacher(teacherId: string) {
+    const teacher = await this.usersRepository.findById(teacherId);
+    if (!teacher || teacher.role !== 'teacher') {
+      throw new ForbiddenException('Only a teacher can schedule a class');
+    }
+    return teacher;
+  }
 
   async findAll() {
     const users = await this.usersRepository.findAll();
@@ -170,5 +180,100 @@ export class UsersService {
       schedule: savedSchedule,
     });
     return savedSchedule;
+  }
+
+  // Turns a group chat into a real recurring class. Only reachable by the
+  // teacher (checked here, not just hidden in the UI) since a class touches
+  // every member's calendar. roomId is set to the conversation's own id —
+  // see the comment on Schedule.roomId for why that's a safe, meaningful key.
+  async scheduleGroup(body: {
+    teacherId: string;
+    teacherName: string;
+    students: { id: string; name: string }[];
+    conversationId: string;
+    groupName: string;
+    initialDateTime: string;
+    startTime: string;
+    endTime: string;
+    dayOfWeek: string;
+    recurrenceWeeks?: number;
+  }) {
+    await this.requireTeacher(body.teacherId);
+    if (!body.students?.length) {
+      throw new NotFoundException('At least one student is required');
+    }
+
+    const savedSchedules = await this.scheduleRepository.createGroupSchedule({
+      teacherId: body.teacherId,
+      teacherName: body.teacherName,
+      students: body.students,
+      roomId: body.conversationId,
+      groupName: body.groupName,
+      initialDateTime: new Date(body.initialDateTime),
+      startTime: new Date(body.startTime),
+      endTime: new Date(body.endTime),
+      dayOfWeek: body.dayOfWeek,
+      recurrenceWeeks: body.recurrenceWeeks || 1,
+    });
+
+    await this.conversationsService.renameGroup(body.conversationId, { linkedToSchedule: true });
+
+    savedSchedules.forEach((schedule) => {
+      this.gateway.notifyScheduleUpdated({ studentId: schedule.studentId, action: 'add', schedule });
+    });
+
+    return { schedules: savedSchedules };
+  }
+
+  // Does this teacher/student pair (or this conversation, once explicitly
+  // linked) already have a class? Checked before offering "add to my
+  // existing class" vs. "pick a new time" when a teacher adds a member.
+  async getScheduleLink(params: { teacherId: string; otherUserId: string; conversationId?: string }) {
+    let rows = params.conversationId
+      ? await this.scheduleRepository.findByRoomId(params.conversationId)
+      : [];
+    if (!rows.length) {
+      rows = await this.scheduleRepository.findLegacyOneOnOne(params.teacherId, params.otherUserId);
+    }
+    if (!rows.length) return { linked: false };
+    return { linked: true, roomId: rows[0].roomId || params.conversationId, groupName: rows[0].groupName || null };
+  }
+
+  // Adds a new student to an already-existing class (the "1v1 event that
+  // already has a professor and gains a third person" case). Backfills
+  // roomId onto legacy rows the first time a plain 1:1 class is extended, so
+  // it becomes a properly-linked group class going forward.
+  async extendScheduleGroup(
+    roomId: string,
+    body: { teacherId: string; studentId: string; studentName: string; groupName?: string },
+  ) {
+    await this.requireTeacher(body.teacherId);
+    await this.scheduleRepository.backfillRoomId(body.teacherId, body.studentId, roomId);
+
+    if (body.groupName) {
+      await this.scheduleRepository.renameByRoomId(roomId, body.groupName);
+    }
+    const newRows = await this.scheduleRepository.extendToMember(roomId, {
+      id: body.studentId,
+      name: body.studentName,
+    });
+    if (!newRows.length) {
+      throw new NotFoundException('No existing class found to extend for this room');
+    }
+
+    // When a name was chosen, this also broadcasts a live 'modify' to every
+    // existing member's calendar (see ConversationsRepository.renameGroup /
+    // broadcastRoomRename) — only the brand new student's rows still need an
+    // explicit push here, since they don't exist on anyone's client yet.
+    await this.conversationsService.renameGroup(roomId, {
+      linkedToSchedule: true,
+      ...(body.groupName ? { name: body.groupName } : {}),
+    });
+
+    newRows.forEach((schedule) => {
+      this.gateway.notifyScheduleUpdated({ studentId: schedule.studentId, action: 'add', schedule });
+    });
+
+    return { schedules: newRows };
   }
 }

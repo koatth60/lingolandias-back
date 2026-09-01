@@ -166,7 +166,18 @@ export class Schedule {
   // Explicit Jitsi room override for group classes booked from a group chat —
   // several students share one room here, so it can't be the usual implicit
   // "room = studentId" convention. Null for every normal 1:1 class (existing
-  // behavior unchanged).
+  // behavior unchanged). Doubles as the link back to Conversation.id: for an
+  // ordinary 1:1 DM those two ids already coincide (a DM's id is the
+  // student's own userId), so setting roomId = conversation.id here is a
+  // no-op for plain classes and only actually does something once a class is
+  // genuinely shared by a group.
   @Column({ type: 'varchar', nullable: true })
   roomId?: string;
+
+  // Overrides the calendar title for every viewer (teacher and every
+  // student) once a class is tied to a group chat — the normal
+  // studentName/teacherName split can't represent "everyone sees the same
+  // title" for a 3+ person class. Null for every normal 1:1 class.
+  @Column({ type: 'varchar', nullable: true })
+  groupName?: string;
 }

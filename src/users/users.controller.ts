@@ -140,4 +140,26 @@ export class UsersController {
   ) {
     return this.usersService.removeEvents(body);
   }
+
+  @Post('schedule-group')
+  @HttpCode(HttpStatus.OK)
+  scheduleGroup(@Body() body: any) {
+    return this.usersService.scheduleGroup(body);
+  }
+
+  @Get('schedule-link')
+  @HttpCode(HttpStatus.OK)
+  getScheduleLink(@Query() query: any) {
+    return this.usersService.getScheduleLink({
+      teacherId: query.teacherId,
+      otherUserId: query.otherUserId,
+      conversationId: query.conversationId,
+    });
+  }
+
+  @Post('schedule-group/:roomId/extend')
+  @HttpCode(HttpStatus.OK)
+  extendScheduleGroup(@Param('roomId') roomId: string, @Body() body: any) {
+    return this.usersService.extendScheduleGroup(roomId, body);
+  }
 }

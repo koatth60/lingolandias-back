@@ -114,16 +114,21 @@ export class ConversationsController {
   }
 
   @Delete(':id/members/:userId')
-  removeMember(@Param('id') id: string, @Param('userId') userId: string) {
-    return this.conversationsService.removeMember(id, userId);
+  removeMember(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @Query('requesterId') requesterId: string,
+  ) {
+    if (!requesterId) throw new BadRequestException('requesterId is required');
+    return this.conversationsService.removeMember(id, userId, requesterId);
   }
 
   @Patch(':id')
   renameGroup(
     @Param('id') id: string,
-    @Body() body: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean },
+    @Body() body: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean; userId?: string },
   ) {
-    return this.conversationsService.renameGroup(id, body);
+    return this.conversationsService.renameGroup(id, body, body?.userId);
   }
 
   @Post(':id/pin')

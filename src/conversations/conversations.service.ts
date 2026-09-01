@@ -29,12 +29,16 @@ export class ConversationsService {
     return this.conversationsRepository.addMember(conversationId, newUserId, opts);
   }
 
-  removeMember(conversationId: string, userId: string) {
-    return this.conversationsRepository.removeMember(conversationId, userId);
+  removeMember(conversationId: string, userId: string, requesterId: string) {
+    return this.conversationsRepository.removeMember(conversationId, userId, requesterId);
   }
 
-  renameGroup(conversationId: string, params: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean }) {
-    return this.conversationsRepository.renameGroup(conversationId, params);
+  renameGroup(
+    conversationId: string,
+    params: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean },
+    requesterId?: string,
+  ) {
+    return this.conversationsRepository.renameGroup(conversationId, params, requesterId);
   }
 
   getMessages(conversationId: string, opts: { before?: string; limit?: number; userId?: string }) {

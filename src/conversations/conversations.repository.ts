@@ -6,7 +6,8 @@ import { Conversation, ConversationType } from './entities/conversation.entity';
 import { ConversationMember } from './entities/conversation-member.entity';
 import { Message } from './entities/message.entity';
 import { ArchivedMessage } from './entities/archived-message.entity';
-import { User } from '../users/entities/user.entity';
+import { Schedule, User } from '../users/entities/user.entity';
+import { ScheduleBroadcaster } from '../gateway/schedule-broadcaster.service';
 
 @Injectable()
 export class ConversationsRepository {
@@ -21,9 +22,29 @@ export class ConversationsRepository {
     private readonly archivedRepo: Repository<ArchivedMessage>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(Schedule)
+    private readonly scheduleRepo: Repository<Schedule>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly scheduleBroadcaster: ScheduleBroadcaster,
   ) {}
+
+  // Every place below that touches Schedule.groupName or a Schedule row for a
+  // linkedToSchedule conversation also pushes it live — otherwise a class's
+  // calendar entry only updates for whoever triggered the change, and every
+  // other participant (including the teacher's own other sessions) would
+  // need a manual refresh to see it.
+  private async broadcastRoomRename(roomId: string) {
+    const rows = await this.scheduleRepo.find({ where: { roomId } });
+    rows.forEach((row) =>
+      this.scheduleBroadcaster.notifyScheduleUpdated({
+        studentId: row.studentId,
+        teacherId: row.teacherId,
+        action: 'modify',
+        schedule: row,
+      }),
+    );
+  }
 
   async getMemberIds(conversationId: string): Promise<string[]> {
     const rows = await this.memberRepo.find({ where: { conversationId } });
@@ -325,32 +346,87 @@ export class ConversationsRepository {
       refreshed.name = await this.computeGroupName(conversationId);
       await this.conversationRepo.save(refreshed);
     }
+    if (refreshed.linkedToSchedule) {
+      await this.scheduleRepo.update({ roomId: conversationId }, { groupName: refreshed.name });
+      await this.broadcastRoomRename(conversationId);
+    }
     return refreshed;
   }
 
-  async removeMember(conversationId: string, userId: string) {
-    await this.memberRepo.delete({ conversationId, userId });
+  // Only the conversation owner (the teacher, for a schedule-linked class) or
+  // the member themself (leaving) may remove someone — previously anyone
+  // could remove anyone. If the group is tied to a scheduled class, the
+  // removed student's calendar rows for it are cleaned up too, otherwise
+  // they'd keep seeing a class they were just kicked out of.
+  async removeMember(conversationId: string, userId: string, requesterId: string) {
     const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
-    if (conversation && conversation.type === 'group' && !conversation.nameIsCustom) {
+    if (!conversation) throw new NotFoundException('Conversation not found');
+    if (requesterId !== userId) {
+      const requesterMembership = await this.memberRepo.findOneBy({ conversationId, userId: requesterId });
+      if (!requesterMembership || requesterMembership.role !== 'owner') {
+        throw new ForbiddenException('Only the group owner can remove another member');
+      }
+    }
+    await this.memberRepo.delete({ conversationId, userId });
+    if (conversation.linkedToSchedule) {
+      const removedRows = await this.scheduleRepo.find({ where: { roomId: conversationId, studentId: userId } });
+      if (removedRows.length) {
+        await this.scheduleRepo.delete({ roomId: conversationId, studentId: userId });
+        this.scheduleBroadcaster.notifyScheduleUpdated({
+          studentId: userId,
+          teacherId: removedRows[0].teacherId,
+          action: 'remove',
+          eventIds: removedRows.map((r) => r.id),
+        });
+      }
+    }
+    if (conversation.type === 'group' && !conversation.nameIsCustom) {
       conversation.name = await this.computeGroupName(conversationId);
       await this.conversationRepo.save(conversation);
+      if (conversation.linkedToSchedule) {
+        await this.scheduleRepo.update({ roomId: conversationId }, { groupName: conversation.name });
+        await this.broadcastRoomRename(conversationId);
+      }
     }
   }
 
+  // requesterId is only supplied by the public rename endpoint (a human
+  // renaming from the chat UI) — UsersService's own scheduling orchestration
+  // (creating/extending a class) calls this internally to sync
+  // linkedToSchedule/name after already verifying the caller is a teacher,
+  // so it's exempt from the check below rather than needing to re-prove it.
   async renameGroup(
     conversationId: string,
     params: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean },
+    requesterId?: string,
   ) {
     const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
     if (!conversation) throw new NotFoundException('Conversation not found');
     if (conversation.type !== 'group') throw new NotFoundException('Only groups can be renamed');
+
+    // A class a teacher scheduled is theirs to name — a member renaming the
+    // chat would otherwise silently retitle everyone's calendar event too.
+    // An ordinary (never-scheduled) group keeps the original Teams-style
+    // "any member can rename" behavior.
+    if (params.name?.trim() && conversation.linkedToSchedule && requesterId) {
+      const requester = await this.userRepo.findOneBy({ id: requesterId });
+      if (!requester || requester.role !== 'teacher' || conversation.createdBy !== requesterId) {
+        throw new ForbiddenException('Only the teacher who scheduled this class can rename it');
+      }
+    }
+
     if (params.name?.trim()) {
       conversation.name = params.name.trim();
       conversation.nameIsCustom = true;
     }
     if (params.avatarUrl !== undefined) conversation.avatarUrl = params.avatarUrl;
     if (params.linkedToSchedule !== undefined) conversation.linkedToSchedule = params.linkedToSchedule;
-    return this.conversationRepo.save(conversation);
+    const saved = await this.conversationRepo.save(conversation);
+    if (params.name?.trim() && saved.linkedToSchedule) {
+      await this.scheduleRepo.update({ roomId: conversationId }, { groupName: saved.name });
+      await this.broadcastRoomRename(conversationId);
+    }
+    return saved;
   }
 
   async setPinned(conversationId: string, userId: string, pinned: boolean) {
@@ -368,11 +444,11 @@ export class ConversationsRepository {
     await this.memberRepo.update({ conversationId, userId }, { deletedAt: new Date() });
   }
 
-  // Hard-deletes a group for every member, not just the requester — any
-  // member can do this today. `linkedToSchedule` groups are excluded because
-  // those are meant to be created/managed by a teacher through the (not yet
-  // wired) scheduling flow; once that exists it should own its own delete
-  // path instead of any member being able to unilaterally wipe it.
+  // Hard-deletes a group for every member. Any member can do this for an
+  // ordinary group; a `linkedToSchedule` group is managed by its scheduled
+  // class, so only the teacher who owns it can delete it, and doing so also
+  // cancels the class for everyone (deletes its Schedule rows) instead of
+  // leaving orphaned calendar entries behind.
   async deleteGroup(conversationId: string, requesterId: string): Promise<string[]> {
     const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
     if (!conversation) throw new NotFoundException('Conversation not found');
@@ -380,20 +456,44 @@ export class ConversationsRepository {
       throw new ForbiddenException('Only groups can be deleted this way');
     }
     if (conversation.linkedToSchedule) {
-      throw new ForbiddenException('This group is managed by its scheduled class and cannot be deleted here');
-    }
-    const isRequesterMember = await this.isMember(conversationId, requesterId);
-    if (!isRequesterMember) {
-      throw new ForbiddenException('Only a member of this group can delete it');
+      const requester = await this.userRepo.findOneBy({ id: requesterId });
+      if (!requester || requester.role !== 'teacher' || conversation.createdBy !== requesterId) {
+        throw new ForbiddenException('Only the teacher who scheduled this class can cancel and delete it');
+      }
+    } else {
+      const isRequesterMember = await this.isMember(conversationId, requesterId);
+      if (!isRequesterMember) {
+        throw new ForbiddenException('Only a member of this group can delete it');
+      }
     }
 
     const memberIds = await this.getMemberIds(conversationId);
+    const removedSchedules = conversation.linkedToSchedule
+      ? await this.scheduleRepo.find({ where: { roomId: conversationId } })
+      : [];
     await this.dataSource.transaction(async (manager) => {
+      if (conversation.linkedToSchedule) {
+        await manager.delete(Schedule, { roomId: conversationId });
+      }
       await manager.delete(ArchivedMessage, { conversationId });
       await manager.delete(Message, { conversationId });
       await manager.delete(ConversationMember, { conversationId });
       await manager.delete(Conversation, { id: conversationId });
     });
+    if (removedSchedules.length) {
+      const byStudent = new Map<string, string[]>();
+      removedSchedules.forEach((row) => {
+        byStudent.set(row.studentId, [...(byStudent.get(row.studentId) || []), row.id]);
+      });
+      byStudent.forEach((eventIds, studentId) => {
+        this.scheduleBroadcaster.notifyScheduleUpdated({
+          studentId,
+          teacherId: removedSchedules[0].teacherId,
+          action: 'remove',
+          eventIds,
+        });
+      });
+    }
     return memberIds;
   }
 
