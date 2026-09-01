@@ -80,6 +80,28 @@ export class ConversationsRepository {
       : [];
     const otherUserById = new Map(otherUsers.map((u) => [u.id, u]));
 
+    // Some DMs have no resolvable "other" member (their account was deleted
+    // since, or the room predates account creation) — fall back to the
+    // display name captured on their own messages so the conversation still
+    // shows a real name instead of a blank "?" row.
+    const unresolvedDmIds = dmIds.filter(
+      (id) => !otherUserById.has(otherUserIdByConv.get(id)),
+    );
+    const fallbackNameByConv = new Map<string, string>();
+    if (unresolvedDmIds.length) {
+      const rows = await this.dataSource.query(
+        `SELECT DISTINCT ON ("conversationId") "conversationId", username FROM (
+           SELECT "conversationId", username, timestamp, "senderId" FROM messages
+           UNION ALL
+           SELECT "conversationId", username, timestamp, "senderId" FROM archived_messages
+         ) all_msgs
+         WHERE "conversationId" = ANY($1) AND ("senderId" IS NULL OR "senderId" != $2)
+         ORDER BY "conversationId", timestamp DESC`,
+        [unresolvedDmIds, userId],
+      );
+      rows.forEach((r: any) => fallbackNameByConv.set(r.conversationId, r.username));
+    }
+
     // Latest message per conversation.
     const lastMessages = conversationIds.length
       ? await this.messageRepo
@@ -127,10 +149,12 @@ export class ConversationsRepository {
       .map((c) => {
         const otherUser = otherUserIdByConv.has(c.id) ? otherUserById.get(otherUserIdByConv.get(c.id)) : null;
         const lastMessage = lastMessageByConv.get(c.id);
+        const fallbackName =
+          c.type === 'dm' && !otherUser ? fallbackNameByConv.get(c.id) || 'Deleted user' : null;
         return {
           id: c.id,
           type: c.type,
-          name: c.type === 'dm' ? null : c.name,
+          name: c.type === 'dm' ? (fallbackName || null) : c.name,
           avatarUrl: c.type === 'dm' ? otherUser?.avatarUrl : c.avatarUrl,
           language: c.language,
           linkedToSchedule: c.linkedToSchedule,
