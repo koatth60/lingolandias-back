@@ -82,6 +82,12 @@ export class UploadController {
       'video/x-msvideo',
       'video/quicktime',
       'application/zip',
+      // Voice notes recorded in-browser via MediaRecorder — Chrome/Edge/
+      // Firefox record webm/opus, Safari records mp4/aac.
+      'audio/webm',
+      'audio/ogg',
+      'audio/mp4',
+      'audio/aac',
       'application/vnd.ms-excel',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     ];
