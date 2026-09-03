@@ -19,5 +19,9 @@ export class UpdateSettingsDto {
 
   @IsBoolean()
   @IsOptional()
+  messageNotifications?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
   watchedTutorial?: boolean;
 }

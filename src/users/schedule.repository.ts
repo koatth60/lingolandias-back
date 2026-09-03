@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { Schedule } from './entities/user.entity';
 
 @Injectable()
@@ -37,6 +37,15 @@ export class ScheduleRepository {
   // should count too, not just an unlinked legacy 1:1.
   async findAnyForPair(teacherId: string, studentId: string): Promise<Schedule[]> {
     return this.repository.find({ where: { teacherId, studentId } });
+  }
+
+  // Same idea as findLegacyOneOnOne, but checked against every CURRENT
+  // member of a conversation instead of one specific person — catches "this
+  // DM already represents an existing 1:1 class" even when the person being
+  // added right now has never had a class with this teacher themselves.
+  async findLegacyForAnyMember(teacherId: string, memberIds: string[]): Promise<Schedule[]> {
+    if (!memberIds.length) return [];
+    return this.repository.find({ where: { teacherId, studentId: In(memberIds), roomId: IsNull() } });
   }
 
   // Classes where this teacher isn't the owner (teacherId) but is listed as
@@ -112,6 +121,15 @@ export class ScheduleRepository {
 
   async backfillRoomId(teacherId: string, studentId: string, roomId: string): Promise<void> {
     await this.repository.update({ teacherId, studentId, roomId: IsNull() }, { roomId });
+  }
+
+  // Same as backfillRoomId, but for every current member of the room at
+  // once — needed because the person we're extending FOR isn't necessarily
+  // the one whose legacy row needs tagging (e.g. adding a guest teacher to a
+  // room where the *existing* student's class was never linked).
+  async backfillRoomIdForMembers(teacherId: string, memberIds: string[], roomId: string): Promise<void> {
+    if (!memberIds.length) return;
+    await this.repository.update({ teacherId, studentId: In(memberIds), roomId: IsNull() }, { roomId });
   }
 
   async renameByRoomId(roomId: string, groupName: string): Promise<void> {

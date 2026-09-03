@@ -24,6 +24,13 @@ export class Settings {
   @Column({ type: 'boolean', default: false })
   classReminders: boolean;
 
+  // Opt-in desktop/OS push notification for new chat messages — separate
+  // toggle from classReminders since a user may want one without the other,
+  // but they share the same underlying browser push subscription (one per
+  // device/origin) — see Settings.jsx's shared subscribe/unsubscribe helper.
+  @Column({ type: 'boolean', default: false })
+  messageNotifications: boolean;
+
   @Column({ type: 'boolean', default: false })
   watchedTutorial: boolean;
 

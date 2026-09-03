@@ -3,6 +3,7 @@ import { UsersRepository } from './users.repository';
 import { ScheduleRepository } from './schedule.repository';
 import { VideoCallsGateway } from 'src/videocalls.gateaway';
 import { ConversationsService } from 'src/conversations/conversations.service';
+import { Schedule } from './entities/user.entity';
 
 @Injectable()
 export class UsersService {
@@ -277,6 +278,18 @@ export class UsersService {
     let rows = params.conversationId
       ? await this.scheduleRepository.findByRoomId(params.conversationId)
       : [];
+    // The room itself might already represent someone ELSE's existing
+    // legacy class — e.g. a teacher's long-standing 1:1 DM with Student A
+    // (never explicitly "linked") gains a 2nd person; neither A's row nor
+    // the new person's own pair has a roomId yet, so check every current
+    // member, not just the person being added.
+    if (!rows.length && params.conversationId) {
+      const memberIds = await this.conversationsService.getMemberIds(params.conversationId);
+      const otherMemberIds = memberIds.filter((id) => id !== params.teacherId);
+      if (otherMemberIds.length) {
+        rows = await this.scheduleRepository.findLegacyForAnyMember(params.teacherId, otherMemberIds);
+      }
+    }
     if (!rows.length) {
       rows = await this.scheduleRepository.findLegacyOneOnOne(params.teacherId, params.otherUserId);
     }
@@ -296,32 +309,57 @@ export class UsersService {
     return { linked: true, roomId: rows[0].roomId || params.conversationId, groupName: rows[0].groupName || null };
   }
 
-  // Adds a new student to an already-existing class (the "1v1 event that
-  // already has a professor and gains a third person" case). Backfills
-  // roomId onto legacy rows the first time a plain 1:1 class is extended, so
-  // it becomes a properly-linked group class going forward.
+  // Adds a new person to an already-existing class at its EXISTING time
+  // slot (the "1:1 event that already has a teacher and student gains a
+  // third person" case) — a student gets their own Schedule row (cloned
+  // from the existing slot); a teacher/admin guest gets no row of their own
+  // and instead rides along as a coTeacherId, same as any teacher who was
+  // already a member when the class was first scheduled.
+  //
+  // Backfills roomId onto every current member's legacy (never-linked) row
+  // the first time this room is extended — not just the person being added
+  // right now — so a plain, never-grouped 1:1 class becomes a properly
+  // linked group class going forward regardless of which side triggered it.
   async extendScheduleGroup(
     roomId: string,
-    body: { teacherId: string; studentId: string; studentName: string; groupName?: string },
+    body: { teacherId: string; personId: string; personName: string; groupName?: string },
   ) {
     await this.requireTeacher(body.teacherId);
-    const [target] = await this.filterToStudents([{ id: body.studentId }]);
+    const target = await this.usersRepository.findById(body.personId);
     if (!target) {
-      throw new ForbiddenException('Only a student can be added to a scheduled class');
+      throw new NotFoundException('Person not found');
     }
-    await this.scheduleRepository.backfillRoomId(body.teacherId, body.studentId, roomId);
+
+    const memberIds = await this.conversationsService.getMemberIds(roomId);
+    const otherMemberIds = memberIds.filter((id) => id !== body.teacherId);
+    if (otherMemberIds.length) {
+      await this.scheduleRepository.backfillRoomIdForMembers(body.teacherId, otherMemberIds, roomId);
+    }
 
     if (body.groupName) {
       await this.scheduleRepository.renameByRoomId(roomId, body.groupName);
     }
-    const newRows = await this.scheduleRepository.extendToMember(roomId, {
-      id: body.studentId,
-      name: body.studentName,
-    });
-    if (!newRows.length) {
-      throw new NotFoundException('No existing class found to extend for this room');
+
+    let newRows: Schedule[] = [];
+    if (target.role === 'user') {
+      await this.scheduleRepository.backfillRoomId(body.teacherId, body.personId, roomId);
+      newRows = await this.scheduleRepository.extendToMember(roomId, {
+        id: body.personId,
+        name: body.personName,
+      });
+      if (!newRows.length) {
+        throw new NotFoundException('No existing class found to extend for this room');
+      }
+      await this.usersRepository.assignTeacherIfUnassigned(body.teacherId, [body.personId]);
+    } else {
+      // Teacher/admin guest: no Schedule row of their own — just make sure
+      // they're actually a member of the room so syncCoTeachers below picks
+      // them up. No-ops if they're already a member.
+      await this.conversationsService.addMember(roomId, body.personId, {
+        addedBy: body.teacherId,
+        shareHistory: true,
+      });
     }
-    await this.usersRepository.assignTeacherIfUnassigned(body.teacherId, [body.studentId]);
 
     // When a name was chosen, this also broadcasts a live 'modify' to every
     // existing member's calendar (see ConversationsRepository.renameGroup /

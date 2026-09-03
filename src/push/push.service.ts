@@ -69,6 +69,18 @@ export class PushService {
     await this.sendPush(userId, title, 'Tap to join', url);
   }
 
+  // Reaches a member of a conversation even when their tab/browser is fully
+  // closed. Caller (VideoCallsGateway) has already filtered out the sender,
+  // anyone who muted this conversation, and anyone who hasn't opted into
+  // messageNotifications — this just formats and sends.
+  async sendNewMessagePush(
+    userId: string,
+    params: { senderName: string; preview: string; chatName?: string },
+  ) {
+    const title = params.chatName ? `${params.senderName} in ${params.chatName}` : params.senderName;
+    await this.sendPush(userId, title, params.preview, '/messages');
+  }
+
   private async sendPush(userId: string, title: string, body: string, url = '/') {
     const subscription = await this.subscriptionRepository.findOne({
       where: { userId },

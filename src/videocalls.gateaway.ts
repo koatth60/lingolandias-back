@@ -634,6 +634,28 @@ export class VideoCallsGateway
     }
   }
 
+  // Filters recipientIds down to members who opted into messageNotifications
+  // and haven't muted this conversation, then fires a push to each.
+  private async sendNewMessagePushes(
+    conversationId: string,
+    recipientIds: string[],
+    senderName: string,
+    preview: string,
+  ) {
+    if (!recipientIds.length) return;
+    const [mutedByUserId, recipients, conversation] = await Promise.all([
+      this.conversationsRepository.getMuteStatusByUserId(conversationId),
+      this.userRepo.find({ where: { id: In(recipientIds) }, relations: ['settings'] }),
+      this.conversationsRepository.getConversationBasic(conversationId),
+    ]);
+    const chatName = conversation?.type === 'group' ? conversation.name : undefined;
+    for (const recipient of recipients) {
+      if (mutedByUserId.get(recipient.id)) continue;
+      if (!recipient.settings?.messageNotifications) continue;
+      await this.pushService.sendNewMessagePush(recipient.id, { senderName, preview, chatName });
+    }
+  }
+
   private emitToUsers(userIds: string[], event: string, payload: any) {
     for (const userId of userIds) {
       const socketIds = this.userSockets.get(userId);
@@ -702,10 +724,19 @@ export class VideoCallsGateway
       // open) so their conversation list preview/unread badge updates live.
       const memberIds = await this.conversationsRepository.getMemberIds(data.conversationId);
       const preview = data.fileUrl ? '📎 File' : safe.slice(0, 80);
-      this.emitToUsers(
-        memberIds.filter((id) => id !== data.senderId),
-        'newConversationMessage',
-        { conversationId: data.conversationId, preview, sender: saved.username },
+      const recipientIds = memberIds.filter((id) => id !== data.senderId);
+      this.emitToUsers(recipientIds, 'newConversationMessage', {
+        conversationId: data.conversationId,
+        preview,
+        sender: saved.username,
+      });
+
+      // OS push notification — reaches a recipient even with the tab/browser
+      // fully closed, same idea as pushCallNotification. Only for members who
+      // opted in AND haven't muted this specific conversation; fire-and-forget
+      // so a slow/failing push never delays message delivery to the sender.
+      this.sendNewMessagePushes(data.conversationId, recipientIds, saved.username, preview).catch((err) =>
+        this.logger.error(`sendNewMessagePushes failed conversationId=${data?.conversationId}`, err),
       );
     } catch (err) {
       this.logger.error(
@@ -733,6 +764,17 @@ export class VideoCallsGateway
       // this, including the reader themselves, which is harmless (their own
       // read state doesn't render anything).
       this.server.to(data.conversationId).emit('conversationRead', {
+        conversationId: data.conversationId,
+        userId: data.userId,
+        readAt,
+      });
+      // Also reach the reader's OTHER sessions directly (sidebar badge, chat
+      // list, a different tab) — none of those necessarily joined this
+      // conversation's own socket room, only an open ChatWindowComponent does.
+      // Without this, an unread badge that was bumped by the arriving message
+      // (see handleSendConversationMessage) never learns it was read until
+      // some unrelated future event forces a full refetch.
+      this.emitToUsers([data.userId], 'conversationRead', {
         conversationId: data.conversationId,
         userId: data.userId,
         readAt,

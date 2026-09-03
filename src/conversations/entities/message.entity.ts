@@ -49,11 +49,21 @@ export class Message {
   @Column({ type: 'jsonb', nullable: true })
   reactions?: Record<string, { id: string; name: string }[]> | null;
 
-  // 'text' (default/omitted) or 'missed_call' — the latter renders with a
-  // distinct look + a Join button in the client instead of as a normal
-  // bubble. senderId is the person who started the unanswered call.
+  // 'text' (default/omitted), 'missed_call', or one of the system-event
+  // types ('member_added', 'member_removed', 'member_left',
+  // 'group_renamed') — all of the latter render as a centered log line
+  // (no avatar/bubble) built from `metadata` instead of `message`.
+  // senderId is null for system events; username/email hold the ACTOR
+  // (who performed the action), not a message author.
   @Column({ type: 'varchar', length: 20, nullable: true })
   messageType?: string;
+
+  // Structured data for system-event messages, e.g.
+  // { targetName } for member_added/member_removed/member_left, or
+  // { oldName, newName } for group_renamed. Rendered client-side via i18n
+  // so it reads in the viewer's own language regardless of who triggered it.
+  @Column({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, any> | null;
 
   @Column({ type: 'timestamp', nullable: true })
   editedAt?: Date;

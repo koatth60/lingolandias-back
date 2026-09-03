@@ -13,6 +13,10 @@ export class ConversationsService {
     return this.conversationsRepository.getMembers(conversationId, requestingUserId);
   }
 
+  getMemberIds(conversationId: string) {
+    return this.conversationsRepository.getMemberIds(conversationId);
+  }
+
   findOrCreateDm(userId: string, otherUserId: string) {
     return this.conversationsRepository.findOrCreateDm(userId, otherUserId);
   }

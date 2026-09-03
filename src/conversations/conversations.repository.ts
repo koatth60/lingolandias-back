@@ -34,6 +34,31 @@ export class ConversationsRepository {
   // calendar entry only updates for whoever triggered the change, and every
   // other participant (including the teacher's own other sessions) would
   // need a manual refresh to see it.
+  // Posts a system-event row (member_added/member_removed/member_left/
+  // group_renamed) into the conversation's own message history and pushes
+  // it live — same delivery path a normal chat message takes. `message` is
+  // just a plain, untranslated fallback string; the actual client-facing
+  // text is built from `metadata` via i18n so every viewer reads it in
+  // their own language regardless of who triggered the event.
+  private async postSystemMessage(
+    conversationId: string,
+    messageType: 'member_added' | 'member_removed' | 'member_left' | 'group_renamed',
+    actor: { name: string; email: string },
+    metadata: Record<string, any>,
+    fallbackMessage: string,
+  ) {
+    const saved = await this.messageRepo.save({
+      conversationId,
+      senderId: null,
+      username: actor.name,
+      email: actor.email,
+      message: fallbackMessage,
+      messageType,
+      metadata,
+    });
+    this.scheduleBroadcaster.notifyConversationMessage(saved);
+  }
+
   private async broadcastRoomRename(roomId: string) {
     const rows = await this.scheduleRepo.find({ where: { roomId } });
     rows.forEach((row) =>
@@ -100,6 +125,21 @@ export class ConversationsRepository {
     return rows.map((r) => r.userId);
   }
 
+  // Used when deciding who should get a push notification for a new message —
+  // a member who muted this specific conversation never should, regardless of
+  // their global push-notification preference.
+  async getMuteStatusByUserId(conversationId: string): Promise<Map<string, boolean>> {
+    const rows = await this.memberRepo.find({ where: { conversationId } });
+    return new Map(rows.map((r) => [r.userId, r.muted]));
+  }
+
+  // Lightweight lookup for push-notification titles — a group message should
+  // show the group's name, a DM shouldn't.
+  async getConversationBasic(conversationId: string): Promise<{ name: string; type: string } | null> {
+    const c = await this.conversationRepo.findOneBy({ id: conversationId });
+    return c ? { name: c.name, type: c.type } : null;
+  }
+
   async getMembers(conversationId: string, requestingUserId?: string) {
     if (!requestingUserId || !(await this.isMember(conversationId, requestingUserId))) {
       throw new ForbiddenException('Not a member of this conversation');
@@ -159,11 +199,35 @@ export class ConversationsRepository {
 
     // For DMs, resolve the *other* member so the client can show their name/avatar.
     const dmIds = conversations.filter((c) => c.type === 'dm').map((c) => c.id);
+
+    // A never-custom-named GROUP that has shrunk back down to exactly 2
+    // members should look and feel like a plain 1:1 again — just "the other
+    // person's name" — the same way a dm does. This is display-only: `type`
+    // stays 'group' in the response, so scheduling features that require it
+    // (extendScheduleGroup/renameGroup, both of which reject a non-'group'
+    // conversation) keep working unchanged; only the resolved name/avatar
+    // shown to each viewer is affected. A `linkedToSchedule` class is
+    // deliberately included here too (not excluded) — the class itself still
+    // lives on as Schedule rows regardless of how the chat is displayed.
+    const candidateGroupIds = conversations.filter((c) => c.type === 'group' && !c.nameIsCustom).map((c) => c.id);
+    const twoPersonGroupIds = new Set<string>();
+    if (candidateGroupIds.length) {
+      const counts = await this.memberRepo
+        .createQueryBuilder('m')
+        .select('m.conversationId', 'conversationId')
+        .addSelect('COUNT(*)', 'count')
+        .where('m.conversationId IN (:...candidateGroupIds)', { candidateGroupIds })
+        .groupBy('m.conversationId')
+        .getRawMany();
+      counts.forEach((r: any) => { if (Number(r.count) === 2) twoPersonGroupIds.add(r.conversationId); });
+    }
+
+    const dmLikeIds = [...dmIds, ...twoPersonGroupIds];
     const otherUserIdByConv = new Map<string, string>();
-    if (dmIds.length) {
+    if (dmLikeIds.length) {
       const otherRows = await this.memberRepo
         .createQueryBuilder('m')
-        .where('m.conversationId IN (:...dmIds)', { dmIds })
+        .where('m.conversationId IN (:...dmLikeIds)', { dmLikeIds })
         .andWhere('m.userId != :userId', { userId })
         .getMany();
       otherRows.forEach((r) => otherUserIdByConv.set(r.conversationId, r.userId));
@@ -242,6 +306,7 @@ export class ConversationsRepository {
 
     const sorted = conversations
       .map((c) => {
+        const isDmLike = c.type === 'dm' || twoPersonGroupIds.has(c.id);
         const otherUser = otherUserIdByConv.has(c.id) ? otherUserById.get(otherUserIdByConv.get(c.id)) : null;
         const lastMessage = lastMessageByConv.get(c.id);
         const fallbackName =
@@ -251,8 +316,8 @@ export class ConversationsRepository {
         return {
           id: c.id,
           type: c.type,
-          name: c.type === 'dm' ? (fallbackName || null) : c.name,
-          avatarUrl: c.type === 'dm' ? otherUser?.avatarUrl : c.avatarUrl,
+          name: isDmLike ? (otherUser ? null : (c.type === 'dm' ? fallbackName : c.name)) : c.name,
+          avatarUrl: isDmLike && otherUser ? otherUser.avatarUrl : c.avatarUrl,
           language: c.language,
           linkedToSchedule: c.linkedToSchedule,
           pinned: membership?.pinned || false,
@@ -433,11 +498,36 @@ export class ConversationsRepository {
       historyVisibleFrom: opts.shareHistory ? null : new Date(),
     });
 
+    const [actor, target] = await Promise.all([
+      this.userRepo.findOneBy({ id: opts.addedBy }),
+      this.userRepo.findOneBy({ id: newUserId }),
+    ]);
+    if (actor && target) {
+      const actorName = `${actor.name} ${actor.lastName}`.trim();
+      const targetName = `${target.name} ${target.lastName}`.trim();
+      await this.postSystemMessage(
+        conversationId,
+        'member_added',
+        { name: actorName, email: actor.email },
+        { targetName },
+        `${actorName} added ${targetName}`,
+      );
+    }
+
     const refreshed = await this.conversationRepo.findOneBy({ id: conversationId });
     if (!refreshed.nameIsCustom) {
       refreshed.name = await this.computeGroupName(conversationId);
       await this.conversationRepo.save(refreshed);
     }
+    // Covers both the name recompute above and a DM just having been
+    // promoted to a group (type flipped earlier in this method) — otherwise
+    // only the person who added the member sees either change live; anyone
+    // else already sitting in the chat needs a manual reload.
+    this.scheduleBroadcaster.notifyConversationUpdated({
+      conversationId,
+      name: refreshed.name,
+      type: refreshed.type,
+    });
     if (refreshed.linkedToSchedule) {
       await this.scheduleRepo.update({ roomId: conversationId }, { groupName: refreshed.name });
       await this.broadcastRoomRename(conversationId);
@@ -464,6 +554,24 @@ export class ConversationsRepository {
       }
     }
     await this.memberRepo.delete({ conversationId, userId });
+
+    const [actor, target] = await Promise.all([
+      this.userRepo.findOneBy({ id: requesterId }),
+      this.userRepo.findOneBy({ id: userId }),
+    ]);
+    if (actor && target) {
+      const actorName = `${actor.name} ${actor.lastName}`.trim();
+      const targetName = `${target.name} ${target.lastName}`.trim();
+      const left = requesterId === userId;
+      await this.postSystemMessage(
+        conversationId,
+        left ? 'member_left' : 'member_removed',
+        { name: actorName, email: actor.email },
+        { targetName },
+        left ? `${actorName} left the chat` : `${actorName} removed ${targetName}`,
+      );
+    }
+
     if (conversation.linkedToSchedule) {
       const removedRows = await this.scheduleRepo.find({ where: { roomId: conversationId, studentId: userId } });
       if (removedRows.length) {
@@ -481,12 +589,29 @@ export class ConversationsRepository {
       await this.syncCoTeachers(conversationId);
     }
     if (conversation.type === 'group' && !conversation.nameIsCustom) {
+      // Keeps the canonical stored name as the joined-names style (e.g.
+      // "JohnVega, Carlos") — that's still what a 3rd person would see if
+      // added back. The Messages-list "looks like a plain 1:1" display (just
+      // the other person's name) is applied at READ time in
+      // findUserConversations when exactly 2 members remain — see there.
       conversation.name = await this.computeGroupName(conversationId);
       await this.conversationRepo.save(conversation);
       if (conversation.linkedToSchedule) {
-        await this.scheduleRepo.update({ roomId: conversationId }, { groupName: conversation.name });
+        // The Calendar page has no per-viewer read-time resolution the way
+        // Messages does — Schedule.groupName is one shared value baked
+        // straight into the event title (useFormattedEvents.js: `groupName
+        // ? title = groupName : title = studentName/teacherName`). So for
+        // exactly 2 people, clear it to null instead of the joined name —
+        // that makes the calendar naturally fall back to its own already-
+        // correct per-viewer default (each side already only ever shows
+        // "the other person" there), instead of a shared 2-name string that
+        // can't be right for both viewers at once.
+        const remainingCount = await this.memberRepo.count({ where: { conversationId } });
+        const groupName = remainingCount === 2 ? null : conversation.name;
+        await this.scheduleRepo.update({ roomId: conversationId }, { groupName });
         await this.broadcastRoomRename(conversationId);
       }
+      this.scheduleBroadcaster.notifyConversationUpdated({ conversationId, name: conversation.name });
     }
   }
 
@@ -515,16 +640,46 @@ export class ConversationsRepository {
       }
     }
 
-    if (params.name?.trim()) {
-      conversation.name = params.name.trim();
+    const oldName = conversation.name;
+    const newName = params.name?.trim();
+    // Only a name that actually DIFFERS from the current one counts as a
+    // deliberate customization. Every "add person to this class" flow
+    // pre-fills its name field with the current (often auto-computed) name
+    // so it always sends *something* — without this check, confirming that
+    // dialog without touching the field would silently lock the group into
+    // "custom" naming forever, permanently disabling the auto-recompute and
+    // the group-shrinks-back-to-a-DM behavior for a class that was never
+    // really renamed on purpose.
+    if (newName && newName !== oldName) {
+      conversation.name = newName;
       conversation.nameIsCustom = true;
     }
     if (params.avatarUrl !== undefined) conversation.avatarUrl = params.avatarUrl;
     if (params.linkedToSchedule !== undefined) conversation.linkedToSchedule = params.linkedToSchedule;
     const saved = await this.conversationRepo.save(conversation);
-    if (params.name?.trim() && saved.linkedToSchedule) {
+    if (newName && saved.linkedToSchedule) {
       await this.scheduleRepo.update({ roomId: conversationId }, { groupName: saved.name });
       await this.broadcastRoomRename(conversationId);
+    }
+    if (newName && newName !== oldName) {
+      this.scheduleBroadcaster.notifyConversationUpdated({ conversationId, name: newName });
+    }
+    // Only a genuine human rename via the public endpoint logs a system
+    // message — the internal calls from UsersService's scheduling
+    // orchestration (setting the initial class name, no requesterId) aren't
+    // someone deliberately renaming an existing group.
+    if (newName && newName !== oldName && requesterId) {
+      const actor = await this.userRepo.findOneBy({ id: requesterId });
+      if (actor) {
+        const actorName = `${actor.name} ${actor.lastName}`.trim();
+        await this.postSystemMessage(
+          conversationId,
+          'group_renamed',
+          { name: actorName, email: actor.email },
+          { oldName: oldName || '', newName },
+          `${actorName} renamed the group from "${oldName || ''}" to "${newName}"`,
+        );
+      }
     }
     return saved;
   }
