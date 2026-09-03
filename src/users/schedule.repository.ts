@@ -22,6 +22,13 @@ export class ScheduleRepository {
     return this.repository.find({ where: { roomId } });
   }
 
+  // Used after removing specific events to check whether this pair has any
+  // class left at all (across every room) — if not, the student should go
+  // back to "unassigned" the same way a full removeStudentsFromTeacher does.
+  async countForPair(teacherId: string, studentId: string): Promise<number> {
+    return this.repository.count({ where: { teacherId, studentId } });
+  }
+
   // A class that predates this feature (or was never grown into a group) has
   // no roomId set yet — this is how we detect "this teacher/student pair
   // already has a 1:1 class" so adding a 3rd person can extend it instead of
@@ -71,7 +78,7 @@ export class ScheduleRepository {
     teacherName: string;
     students: { id: string; name: string }[];
     roomId: string;
-    groupName: string;
+    groupName?: string;
     initialDateTime: Date;
     startTime: Date;
     endTime: Date;
@@ -84,7 +91,7 @@ export class ScheduleRepository {
       studentId: student.id,
       studentName: student.name,
       roomId: params.roomId,
-      groupName: params.groupName,
+      groupName: params.groupName ?? null,
       initialDateTime: params.initialDateTime,
       startTime: params.startTime,
       endTime: params.endTime,
@@ -100,8 +107,17 @@ export class ScheduleRepository {
   // caller backfills roomId onto those rows first — see UsersService.
   async extendToMember(roomId: string, student: { id: string; name: string }): Promise<Schedule[]> {
     const existing = await this.findByRoomId(roomId);
+    // Confirming "add to class" twice for the same student (e.g. once via
+    // the mention picker, once later via Add People) must not double-book
+    // them — skip any template slot they already hold in this room.
+    const heldSlots = new Set(
+      existing
+        .filter((row) => row.studentId === student.id)
+        .map((row) => `${row.startTime?.toISOString()}|${row.dayOfWeek}`)
+    );
     const clones = existing
       .filter((row) => row.studentId !== student.id)
+      .filter((row) => !heldSlots.has(`${row.startTime?.toISOString()}|${row.dayOfWeek}`))
       .map((row) => ({
         teacherId: row.teacherId,
         teacherName: row.teacherName,
@@ -168,11 +184,14 @@ export class ScheduleRepository {
 
     return await this.repository.save(schedule);
   }
+  // Returns the rows actually deleted (not just a boolean) so the caller can
+  // see which room(s) they belonged to — needed to check whether any of
+  // those rooms are now fully unlinked (see UsersService.removeEvents).
   async removeEvents(body: {
     eventIds: string[];
     teacherId: string;
     studentId: string;
-  }): Promise<boolean> {
+  }): Promise<Schedule[]> {
     const { eventIds, teacherId, studentId } = body;
     // `IN (:...eventIds)` with an empty array produces invalid SQL ("IN ()"), which
     // Postgres rejects with a syntax error — reachable from the UI by confirming the
@@ -180,18 +199,13 @@ export class ScheduleRepository {
     if (!eventIds || eventIds.length === 0) {
       throw new BadRequestException('No event IDs provided');
     }
-    const result = await this.repository
-      .createQueryBuilder()
-      .delete()
-      .from(Schedule)
-      .where('id IN (:...eventIds)', { eventIds })
-      .andWhere('teacherId = :teacherId', { teacherId })
-      .andWhere('studentId = :studentId', { studentId })
-      .execute();
-
-    if (result.affected === 0) {
+    const rows = await this.repository.find({
+      where: { id: In(eventIds), teacherId, studentId },
+    });
+    if (!rows.length) {
       throw new NotFoundException('Events not found');
     }
-    return true;
+    await this.repository.delete(rows.map((row) => row.id));
+    return rows;
   }
 }

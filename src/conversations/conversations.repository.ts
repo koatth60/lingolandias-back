@@ -448,6 +448,12 @@ export class ConversationsRepository {
         name: name.trim(),
         avatarUrl,
         createdBy,
+        // The creation form requires a name (thrown above if blank), so it's
+        // always an explicit choice — mark it custom immediately, otherwise
+        // any brand-new 2-person group gets mistaken by findAllForUser's
+        // "shrunk back to 2 members" collapse for an unnamed one and shows
+        // the other member's name instead of the real group name.
+        nameIsCustom: true,
       });
       await manager.save(conversation);
       await manager.save(ConversationMember, [
@@ -615,6 +621,14 @@ export class ConversationsRepository {
     }
   }
 
+  // Lets UsersService.scheduleGroup check, before writing anything, whether
+  // it's scheduling a real named group or just a 1:1 DM that grew a class —
+  // see the groupName note in scheduleGroup for why that distinction matters.
+  async getType(conversationId: string): Promise<string | null> {
+    const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
+    return conversation?.type ?? null;
+  }
+
   // requesterId is only supplied by the public rename endpoint (a human
   // renaming from the chat UI) — UsersService's own scheduling orchestration
   // (creating/extending a class) calls this internally to sync
@@ -627,7 +641,18 @@ export class ConversationsRepository {
   ) {
     const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
     if (!conversation) throw new NotFoundException('Conversation not found');
-    if (conversation.type !== 'group') throw new NotFoundException('Only groups can be renamed');
+    // A plain 1:1 DM stays a DM even once a class is scheduled from it —
+    // each side already sees the other person's name, no group name needed.
+    // scheduleGroup's internal call (no requesterId) always sends a `name`
+    // too, reusing the same request shape as a real group — for a DM that
+    // name is just dropped below instead of applied. A user-facing rename
+    // attempt (requesterId set) on a non-group conversation still fails
+    // outright — renaming isn't a UI-exposed action on a DM in the first
+    // place, so reaching this with requesterId set would be unexpected.
+    const isNameApplicable = conversation.type === 'group';
+    if (conversation.type !== 'group' && requesterId) {
+      throw new NotFoundException('Only groups can be renamed');
+    }
 
     // A class a teacher scheduled is theirs to name — a member renaming the
     // chat would otherwise silently retitle everyone's calendar event too.
@@ -650,18 +675,18 @@ export class ConversationsRepository {
     // "custom" naming forever, permanently disabling the auto-recompute and
     // the group-shrinks-back-to-a-DM behavior for a class that was never
     // really renamed on purpose.
-    if (newName && newName !== oldName) {
+    if (isNameApplicable && newName && newName !== oldName) {
       conversation.name = newName;
       conversation.nameIsCustom = true;
     }
     if (params.avatarUrl !== undefined) conversation.avatarUrl = params.avatarUrl;
     if (params.linkedToSchedule !== undefined) conversation.linkedToSchedule = params.linkedToSchedule;
     const saved = await this.conversationRepo.save(conversation);
-    if (newName && saved.linkedToSchedule) {
+    if (isNameApplicable && newName && saved.linkedToSchedule) {
       await this.scheduleRepo.update({ roomId: conversationId }, { groupName: saved.name });
       await this.broadcastRoomRename(conversationId);
     }
-    if (newName && newName !== oldName) {
+    if (isNameApplicable && newName && newName !== oldName) {
       this.scheduleBroadcaster.notifyConversationUpdated({ conversationId, name: newName });
     }
     // Only a genuine human rename via the public endpoint logs a system

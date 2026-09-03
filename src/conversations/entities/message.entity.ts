@@ -68,6 +68,15 @@ export class Message {
   @Column({ type: 'timestamp', nullable: true })
   editedAt?: Date;
 
+  // Extracted server-side from `message`'s @[Name](userId) markup — never
+  // trusted from the client directly, since that'd let anyone claim to have
+  // mentioned someone they didn't actually type. Filtered to this
+  // conversation's actual current members (see handleSendConversationMessage).
+  // Drives the "you were mentioned" push/toast, separate from the general
+  // new-message notification every member already gets.
+  @Column({ type: 'jsonb', nullable: true })
+  mentionedUserIds?: string[] | null;
+
   @CreateDateColumn({ type: 'timestamp' })
   timestamp: Date;
 }

@@ -109,10 +109,36 @@ export class UsersService {
     teacherId: string;
     studentId: string;
   }) {
-    const success = await this.scheduleRepository.removeEvents(body);
-    if (!success) {
-      throw new NotFoundException('Events not found');
+    const removedRows = await this.scheduleRepository.removeEvents(body);
+
+    // Picking off individual events this way (as opposed to the "remove
+    // student entirely" path, which already handles this) can still land on
+    // the exact same end state — every class this pair had is now gone, e.g.
+    // a teacher unchecking each slot one by one instead of using "remove
+    // all". Without this, the student would keep showing as assigned with
+    // no classes, and any linked chat would keep offering "schedule a class"
+    // as already-linked forever. Mirrors removeMember's same check.
+    const remaining = await this.scheduleRepository.countForPair(body.teacherId, body.studentId);
+    if (remaining === 0) {
+      const student = await this.usersRepository.findById(body.studentId);
+      if (student?.teacher?.id === body.teacherId) {
+        student.teacher = null;
+        await this.usersRepository.save(student);
+      }
     }
+
+    // Same idea per-room: a room this pair shared (a class chat) may now
+    // have zero Schedule rows left even though the pair still has classes
+    // elsewhere — that room's own linkedToSchedule needs to drop too, or its
+    // chat keeps looking like an active class forever.
+    const affectedRoomIds = [...new Set(removedRows.map((row) => row.roomId).filter(Boolean))];
+    for (const roomId of affectedRoomIds) {
+      const stillLinked = await this.scheduleRepository.findByRoomId(roomId);
+      if (!stillLinked.length) {
+        await this.conversationsService.renameGroup(roomId, { linkedToSchedule: false });
+      }
+    }
+
     this.gateway.notifyScheduleUpdated({
       studentId: body.studentId,
       action: 'remove',
@@ -232,12 +258,25 @@ export class UsersService {
       throw new NotFoundException('At least one student is required');
     }
 
+    // promptScheduleForStudentDm (a teacher scheduling straight from a
+    // student's DM, no group ever created) sends the same request shape as a
+    // real group and pre-fills groupName with the student's own name just so
+    // ScheduleClassPicker's name field isn't blank — it was never meant to
+    // become a persisted class title. Schedule.groupName only overrides the
+    // calendar/Home title for a real multi-person class (see the entity
+    // comment); left set here, it'd show the student their own name instead
+    // of their teacher's on their own Home page. Only apply it when the
+    // conversation is an actual 'group' — a DM stays nameless like any
+    // ordinary 1:1 class.
+    const isRealGroup = (await this.conversationsService.getType(body.conversationId)) === 'group';
+    const groupName = isRealGroup ? body.groupName : undefined;
+
     const savedSchedules = await this.scheduleRepository.createGroupSchedule({
       teacherId: body.teacherId,
       teacherName: body.teacherName,
       students,
       roomId: body.conversationId,
-      groupName: body.groupName,
+      groupName,
       initialDateTime: new Date(body.initialDateTime),
       startTime: new Date(body.startTime),
       endTime: new Date(body.endTime),
@@ -251,7 +290,9 @@ export class UsersService {
     // addMember call (nameIsCustom still false) auto-recomputes the group's
     // display name from its member list and overwrites this Schedule row's
     // groupName right back to that generic name, silently clobbering the
-    // class name the teacher just deliberately chose.
+    // class name the teacher just deliberately chose. renameGroup itself
+    // no-ops the name for a non-group conversation, so passing groupName
+    // (not the possibly-undefined local above) is fine either way.
     await this.conversationsService.renameGroup(body.conversationId, {
       linkedToSchedule: true,
       name: body.groupName,

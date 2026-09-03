@@ -69,6 +69,19 @@ export class PushService {
     await this.sendPush(userId, title, 'Tap to join', url);
   }
 
+  // Unlike sendNewMessagePush, deliberately NOT gated on messageNotifications
+  // or this conversation being muted — being personally @mentioned is a
+  // different, more direct kind of notification than "someone posted in a
+  // chat you're in", the same way muting a busy group channel still lets a
+  // direct mention through on Slack/Teams.
+  async sendMentionPush(
+    userId: string,
+    params: { senderName: string; preview: string; conversationId: string },
+  ) {
+    const title = `${params.senderName} mentioned you`;
+    await this.sendPush(userId, title, params.preview, '/messages');
+  }
+
   // Reaches a member of a conversation even when their tab/browser is fully
   // closed. Caller (VideoCallsGateway) has already filtered out the sender,
   // anyone who muted this conversation, and anyone who hasn't opted into

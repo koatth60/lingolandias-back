@@ -31,6 +31,11 @@ import { ScheduleBroadcaster } from './gateway/schedule-broadcaster.service';
 const MAX_MESSAGE_LENGTH = 4000;
 const RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
 const RATE_LIMIT_MAX = 20;           // max messages per window
+// Comfortably covers Jitsi/XMPP presence-propagation lag (typically well
+// under a second, occasionally a couple) between two near-simultaneous
+// joiners each thinking they're first, without risking swallowing a
+// genuinely new call placed to the same room minutes later.
+const CALL_START_DEDUP_WINDOW_MS = 10_000;
 
 @Injectable({ scope: Scope.DEFAULT })
 @WebSocketGateway({
@@ -62,6 +67,15 @@ export class VideoCallsGateway
   private readonly offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // Room membership: roomId → Set<userId>
   private readonly roomMembers = new Map<string, Set<string>>();
+  // Last callStarted timestamp per conversationId — guards against the race
+  // where two people join a 1:1 within moments of each other and each one's
+  // own Jitsi client still sees an empty room (participant-list propagation
+  // hasn't caught up yet), so BOTH fire callStarted and the other side who's
+  // already in the call gets rung again. Client-side timing can't fix this
+  // reliably since it depends on Jitsi/XMPP presence propagation delay, not
+  // anything either browser controls — deduping here, where every call-start
+  // for a room passes through one place, does.
+  private readonly recentCallStarts = new Map<string, number>();
   // Rate limiting: socketId → { count, resetAt }
   private readonly rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
@@ -132,6 +146,17 @@ export class VideoCallsGateway
   private sanitizeMessage(text: string): string {
     if (!text) return '';
     return text.slice(0, MAX_MESSAGE_LENGTH);
+  }
+
+  // Mentions are written into the message text itself as @[Display
+  // Name](userId) — the frontend inserts this when someone is picked from
+  // the @ autocomplete, and renders it back into a styled chip on display.
+  // This is the one place that markup gets turned into an actual list of
+  // who to notify; see the caller for why it's parsed from the text rather
+  // than trusted from a client-supplied array.
+  private extractMentionedUserIds(text: string): string[] {
+    const matches = text.matchAll(/@\[[^\]]*\]\(([0-9a-f-]{36})\)/g);
+    return [...new Set([...matches].map((m) => m[1]))];
   }
 
   private isValidRoom(room: string): boolean {
@@ -703,6 +728,18 @@ export class VideoCallsGateway
       }
 
       const safe = this.sanitizeMessage(data.message);
+      // Fetched before saving so the mention filter below can use it too —
+      // needed either way for the newConversationMessage/push fan-out.
+      const memberIds = await this.conversationsRepository.getMemberIds(data.conversationId);
+      // Parsed from the message text itself, never taken from the client's
+      // own claim of who it mentioned — a client could otherwise trigger a
+      // "you were mentioned" push at anyone by just sending their id, mention
+      // markup or not. Filtered to actual current members: mentioning
+      // someone not in this conversation isn't a real mention (yet — auto-
+      // adding a mentioned non-member is a separate, not-yet-built feature).
+      const mentionedUserIds = this.extractMentionedUserIds(safe).filter(
+        (id) => id !== data.senderId && memberIds.includes(id),
+      );
       const saved = await this.conversationsRepository.saveMessage({
         conversationId: data.conversationId,
         senderId: data.senderId,
@@ -715,6 +752,7 @@ export class VideoCallsGateway
         userRole: data.userRole,
         replyTo: data.replyTo || null,
         messageType: data.messageType === 'missed_call' ? 'missed_call' : undefined,
+        mentionedUserIds: mentionedUserIds.length ? mentionedUserIds : null,
         timestamp: new Date(),
       });
 
@@ -722,8 +760,10 @@ export class VideoCallsGateway
 
       // Notify every member's personal sockets (not just those with the room
       // open) so their conversation list preview/unread badge updates live.
-      const memberIds = await this.conversationsRepository.getMemberIds(data.conversationId);
-      const preview = data.fileUrl ? '📎 File' : safe.slice(0, 80);
+      // Strip @[Name](id) mention markup first — this same preview also feeds
+      // the "mentioned" toast and the push notification body, neither of
+      // which should show raw markup.
+      const preview = data.fileUrl ? '📎 File' : safe.replace(/@\[([^\]]+)\]\([0-9a-f-]{36}\)/g, '@$1').slice(0, 80);
       const recipientIds = memberIds.filter((id) => id !== data.senderId);
       this.emitToUsers(recipientIds, 'newConversationMessage', {
         conversationId: data.conversationId,
@@ -738,6 +778,24 @@ export class VideoCallsGateway
       this.sendNewMessagePushes(data.conversationId, recipientIds, saved.username, preview).catch((err) =>
         this.logger.error(`sendNewMessagePushes failed conversationId=${data?.conversationId}`, err),
       );
+
+      // Mention notifications are deliberately separate from (and in
+      // addition to) the general new-message push above — someone who muted
+      // this conversation, or never opted into messageNotifications at all,
+      // still gets pinged when it's actually about them. In-app toast via
+      // socket for anyone online right now; push covers a closed tab too.
+      if (mentionedUserIds.length) {
+        this.emitToUsers(mentionedUserIds, 'mentioned', {
+          conversationId: data.conversationId,
+          senderName: saved.username,
+          preview,
+        });
+        for (const userId of mentionedUserIds) {
+          this.pushService
+            .sendMentionPush(userId, { senderName: saved.username, preview, conversationId: data.conversationId })
+            .catch((err) => this.logger.error(`sendMentionPush failed userId=${userId}`, err));
+        }
+      }
     } catch (err) {
       this.logger.error(
         `handleSendConversationMessage error conversationId=${data?.conversationId} socket=${socket.id}`,
@@ -894,6 +952,13 @@ export class VideoCallsGateway
         this.logger.warn(`[callStarted] rejected: socket not authenticated (socket=${socket.id})`);
         return;
       }
+      const now = Date.now();
+      const lastCallStart = this.recentCallStarts.get(data.conversationId);
+      if (lastCallStart && now - lastCallStart < CALL_START_DEDUP_WINDOW_MS) {
+        this.logger.warn(`[callStarted] deduped: conversationId=${data.conversationId} caller=${data.callerId} (ringed ${now - lastCallStart}ms ago)`);
+        return;
+      }
+      this.recentCallStarts.set(data.conversationId, now);
       const payload = {
         conversationId: data.conversationId,
         callerId: data.callerId,

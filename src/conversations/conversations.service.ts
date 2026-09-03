@@ -41,6 +41,10 @@ export class ConversationsService {
     return this.conversationsRepository.removeMember(conversationId, userId, requesterId);
   }
 
+  getType(conversationId: string) {
+    return this.conversationsRepository.getType(conversationId);
+  }
+
   renameGroup(
     conversationId: string,
     params: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean },

@@ -8,6 +8,10 @@ import { UnreadGlobalMessage } from 'src/chat/entities/unread-global-messages.en
 import { Chat } from 'src/chat/entities/chat.entity';
 import { ArchivedChat } from 'src/chat/entities/archived-chat.entity';
 import { TrelloBoard } from 'src/trello/entities/trello-board.entity';
+import { Conversation } from 'src/conversations/entities/conversation.entity';
+import { ConversationMember } from 'src/conversations/entities/conversation-member.entity';
+import { Message } from 'src/conversations/entities/message.entity';
+import { ArchivedMessage } from 'src/conversations/entities/archived-message.entity';
 
 @Injectable()
 export class UsersRepository {
@@ -303,6 +307,38 @@ export class UsersRepository {
       // transaction as the schedule/link removal, makes the whole operation all-or-nothing.
       await manager.delete(Chat, { room: In(validStudentIds) });
       await manager.delete(ArchivedChat, { room: In(validStudentIds) });
+
+      // Same cleanup for the newer Messages system (conversations/messages) —
+      // the legacy Chat/ArchivedChat rows above only ever covered the old
+      // chat tables and were never extended when that system was built, so
+      // a DM or group chat (and its full message history) survived an admin
+      // unlinking a student forever, even with the class itself gone. A
+      // plain 1:1 DM with the teacher is deleted outright, same as the
+      // class. A GROUP chat that still has other members (classmates who
+      // weren't removed) only loses this one student — deleting the whole
+      // group would wipe it out for everyone else still enrolled in it.
+      const teacherConversationIds = (
+        await manager.find(ConversationMember, { where: { userId: teacherId }, select: ['conversationId'] })
+      ).map((m) => m.conversationId);
+      if (teacherConversationIds.length) {
+        for (const studentId of validStudentIds) {
+          const sharedConversations = await manager.find(ConversationMember, {
+            where: { userId: studentId, conversationId: In(teacherConversationIds) },
+            select: ['conversationId'],
+          });
+          for (const { conversationId } of sharedConversations) {
+            const memberCount = await manager.count(ConversationMember, { where: { conversationId } });
+            if (memberCount <= 2) {
+              await manager.delete(Message, { conversationId });
+              await manager.delete(ArchivedMessage, { conversationId });
+              await manager.delete(ConversationMember, { conversationId });
+              await manager.delete(Conversation, { id: conversationId });
+            } else {
+              await manager.delete(ConversationMember, { conversationId, userId: studentId });
+            }
+          }
+        }
+      }
 
       students.forEach((student) => {
         student.teacher = null;
