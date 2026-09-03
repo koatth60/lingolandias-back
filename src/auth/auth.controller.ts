@@ -6,10 +6,13 @@ import {
   HttpStatus,
   Param,
   Post,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { AuthGuard } from './guards/auth.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -31,6 +34,13 @@ export class AuthController {
   @Post('logout')
   async logout(@Body('userId') userId: string) {
     return this.authService.logout(userId);
+  }
+
+  @Post('refresh')
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async refresh(@Req() req: any) {
+    return this.authService.refresh(req.user.id);
   }
 
   @Post('forgot-password')

@@ -42,7 +42,12 @@ import { ConversationsModule } from './conversations/conversations.module';
     JwtModule.register({
       global: true,
       secret: process.env.JWT_SECRET,
-      signOptions: { expiresIn: '7d' },
+      // 30d base life + a sliding refresh (POST /auth/refresh, called from
+      // the frontend's useAuthExpiry hook on every app open and every 24h
+      // while a tab stays open) means an actively-used session effectively
+      // never expires, like Skype/WhatsApp Web - only a device unused for a
+      // full 30 days gets logged out.
+      signOptions: { expiresIn: '30d' },
     }),
     AuthModule,
     ChatModule,

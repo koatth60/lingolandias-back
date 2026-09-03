@@ -92,6 +92,20 @@ export class AuthService {
     return { token, user: userWithSettings };
   }
 
+  // Re-signs a brand-new token with the same identity payload and a fresh
+  // 30d expiry. Requires the caller to already hold a currently-valid token
+  // (enforced by AuthGuard on the route) - this is a sliding-session
+  // renewal, not a separate long-lived refresh-token mechanism, so a token
+  // that's already expired can't be used to mint a new one.
+  async refresh(userId: string) {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+    const token = this.jwtService.sign({ email: user.email, id: user.id });
+    return { token };
+  }
+
   async logout(userId: string) {
     const foundUser = await this.usersRepository.findById(userId);
 
