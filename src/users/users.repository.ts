@@ -273,6 +273,31 @@ export class UsersRepository {
     return updatedUser;
   }
 
+  async updateUserCoverImage(
+    userId: string,
+    imageUrl: string,
+  ): Promise<User> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      relations: [
+        'students',
+        'teacher',
+        'studentSchedules',
+        'teacherSchedules',
+        'settings',
+      ],
+    });
+
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    user.coverUrl = imageUrl;
+
+    const updatedUser = await this.usersRepository.save(user);
+    return updatedUser;
+  }
+
   async removeStudentsFromTeacher(body: any): Promise<any> {
     const { teacherId, studentIds } = body;
 
@@ -507,8 +532,8 @@ export class UsersRepository {
     return qb.orderBy('user.name', 'ASC').take(limit).getMany();
   }
 
-  async getPublicProfile(id: string): Promise<Partial<User> | null> {
-    return this.usersRepository.findOne({
+  async getPublicProfile(id: string): Promise<any | null> {
+    const user = await this.usersRepository.findOne({
       where: { id },
       select: [
         'id',
@@ -517,10 +542,24 @@ export class UsersRepository {
         'email',
         'role',
         'avatarUrl',
+        'coverUrl',
+        'createdAt',
         'online',
         'biography',
         'language',
+        'country',
+        'city',
       ],
     });
+    if (!user) return null;
+
+    // A real, derivable activity count — never a fabricated "level". Teachers
+    // count classes they teach, students count classes they attend.
+    const classesCount =
+      user.role === 'teacher'
+        ? await this.scheduleRepository.count({ where: { teacherId: id } })
+        : await this.scheduleRepository.count({ where: { studentId: id } });
+
+    return { ...user, classesCount };
   }
 }

@@ -56,6 +56,34 @@ export class UploadController {
     }
   }
 
+  @Post('cover')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadCover(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('userId') userId: string,
+  ) {
+    if (!file) {
+      throw new HttpException('No file provided', HttpStatus.BAD_REQUEST);
+    }
+
+    try {
+      const uploadResult = await this.s3Service.uploadFile(file);
+      const updatedUser = await this.usersRepository.updateUserCoverImage(
+        userId,
+        uploadResult.url,
+      );
+      return {
+        message: 'Cover image uploaded successfully and user profile updated',
+        user: updatedUser,
+      };
+    } catch (error) {
+      throw new HttpException(
+        'Error uploading cover image and updating user profile',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
   @Post('chat-upload')
   @UseInterceptors(FileInterceptor('file'))
   async uploadChatFile(

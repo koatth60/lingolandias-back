@@ -35,6 +35,7 @@ export class AuthService {
     const unsavedReadMessageUser = await this.usersRepository.register({
       ...newUser,
       password: hashedPassword,
+      createdAt: new Date(),
     });
 
     const unreadGlobalMessage = new UnreadGlobalMessage();

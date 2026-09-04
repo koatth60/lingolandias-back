@@ -639,6 +639,18 @@ export class VideoCallsGateway
   // new handlers, since those write to the new `messages` table instead of
   // `chats`/`global-chats`.
 
+  // Admins can join any class from the admin dashboard to observe, but are
+  // never an actual call participant — ringing them for every class that
+  // starts platform-wide would be constant noise. Used everywhere callStarted
+  // resolves a recipient list, both the 1:1 and group-conversation branches.
+  private async excludeAdmins(userIds: string[]): Promise<string[]> {
+    if (!userIds.length) return userIds;
+    const admins = await this.userRepo.find({ where: { id: In(userIds), role: 'admin' }, select: ['id'] });
+    if (!admins.length) return userIds;
+    const adminIds = new Set(admins.map((a) => a.id));
+    return userIds.filter((id) => !adminIds.has(id));
+  }
+
   // Fire-and-forget alongside emitToUsers — reaches a subscribed browser
   // even fully closed, unlike the socket event alone. Never awaited by the
   // caller: a slow/failing push provider shouldn't delay the in-app ring.
@@ -967,9 +979,12 @@ export class VideoCallsGateway
         chatType: data.chatType,
       };
       if (data.otherUserId) {
-        this.logger.warn(`[callStarted] 1:1 notify otherUserId=${data.otherUserId} caller=${data.callerId}`);
-        this.emitToUsers([data.otherUserId], 'callStarted', payload);
-        this.pushCallNotification([data.otherUserId], payload);
+        const recipients = await this.excludeAdmins([data.otherUserId]);
+        if (recipients.length) {
+          this.logger.warn(`[callStarted] 1:1 notify otherUserId=${data.otherUserId} caller=${data.callerId}`);
+          this.emitToUsers(recipients, 'callStarted', payload);
+          this.pushCallNotification(recipients, payload);
+        }
         return;
       }
       if (!this.isValidRoom(data.conversationId)) {
@@ -982,7 +997,10 @@ export class VideoCallsGateway
         return;
       }
       const memberIds = await this.conversationsRepository.getMemberIds(data.conversationId);
-      const targets = memberIds.filter((id) => id !== data.callerId);
+      // Admins can join any class to observe from the admin dashboard, but
+      // must never be rung like an actual call participant — they're a
+      // silent observer, not part of the call.
+      const targets = await this.excludeAdmins(memberIds.filter((id) => id !== data.callerId));
       this.logger.warn(`[callStarted] group notify targets=${JSON.stringify(targets)} caller=${data.callerId} conversationId=${data.conversationId}`);
       this.emitToUsers(targets, 'callStarted', payload);
       this.pushCallNotification(targets, payload);

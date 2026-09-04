@@ -36,6 +36,17 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   avatarUrl: string;
 
+  @Column({ type: 'varchar', nullable: true })
+  coverUrl: string;
+
+  // Deliberately NOT @CreateDateColumn — that would backfill every
+  // pre-existing row with the migration's run time via a DB-level DEFAULT,
+  // which would show a fake "member since" date for every current user.
+  // Nullable with no default: old rows stay null (hidden in the UI), new
+  // rows get a real value set explicitly at registration.
+  @Column({ type: 'timestamp', nullable: true })
+  createdAt: Date;
+
   @Column({ type: 'text', nullable: true })
   biography: string;
 
