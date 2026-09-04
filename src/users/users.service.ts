@@ -1,17 +1,23 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { UsersRepository } from './users.repository';
 import { ScheduleRepository } from './schedule.repository';
 import { VideoCallsGateway } from 'src/videocalls.gateaway';
 import { ConversationsService } from 'src/conversations/conversations.service';
-import { Schedule } from './entities/user.entity';
+import { MailService } from 'src/mail/mail.service';
+import { Schedule, User } from './entities/user.entity';
+import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly usersRepository: UsersRepository,
     private readonly scheduleRepository: ScheduleRepository,
     private readonly gateway: VideoCallsGateway,
     private readonly conversationsService: ConversationsService,
+    private readonly mailService: MailService,
   ) {}
 
   private async requireTeacher(teacherId: string) {
@@ -31,7 +37,9 @@ export class UsersService {
   private async filterToStudents<T extends { id: string }>(candidates: T[]): Promise<T[]> {
     if (!candidates.length) return [];
     const users = await this.usersRepository.findByIds(candidates.map((c) => c.id));
-    const studentIds = new Set(users.filter((u) => u.role === 'user').map((u) => u.id));
+    const studentIds = new Set(
+      users.filter((u) => u.role === 'user' || u.role === 'invitado').map((u) => u.id),
+    );
     return candidates.filter((c) => studentIds.has(c.id));
   }
 
@@ -382,7 +390,7 @@ export class UsersService {
     }
 
     let newRows: Schedule[] = [];
-    if (target.role === 'user') {
+    if (target.role === 'user' || target.role === 'invitado') {
       await this.scheduleRepository.backfillRoomId(body.teacherId, body.personId, roomId);
       newRows = await this.scheduleRepository.extendToMember(roomId, {
         id: body.personId,
@@ -417,5 +425,152 @@ export class UsersService {
     });
 
     return { schedules: newRows };
+  }
+
+  private generateGuestPassword(): string {
+    return crypto.randomBytes(9).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 10);
+  }
+
+  // Neutral Spanish (no voseo/regionalisms) so it reads naturally for any
+  // Spanish-speaking teacher, not just Argentina.
+  private buildInvitadoCredentialsMessage(
+    lang: string,
+    data: { email: string; password: string; frontendUrl: string },
+  ): string {
+    const templates: Record<string, string> = {
+      en: `Welcome to the platform! We already sent your credentials by email — leaving them here too just in case.\nEmail: ${data.email}\nPassword: ${data.password}\nLink: ${data.frontendUrl}\n\nReply to this message here to coordinate joining a class.`,
+      es: `¡Bienvenido/a a la plataforma! Ya te enviamos tus credenciales por correo electrónico — también las dejamos aquí por si acaso.\nCorreo: ${data.email}\nContraseña: ${data.password}\nEnlace: ${data.frontendUrl}\n\nResponde este mensaje aquí para coordinar unirte a una clase.`,
+      pl: `Witamy na platformie! Wysłaliśmy już Twoje dane logowania e-mailem — zostawiamy je też tutaj na wszelki wypadek.\nE-mail: ${data.email}\nHasło: ${data.password}\nLink: ${data.frontendUrl}\n\nOdpowiedz na tę wiadomość tutaj, aby ustalić dołączenie do zajęć.`,
+    };
+    return templates[lang] || templates.en;
+  }
+
+  // Only a teacher can create an invitado, and only for themselves (they
+  // become the owning `teacher` relation, same field a real student uses) —
+  // an invitado never goes through the public /auth/register endpoint and
+  // never picks its own role/password. Credentials are delivered as a chat
+  // message instead of the welcome email every other role gets (see
+  // AuthService.register) — that flow doesn't exist yet for any role, so
+  // it's built here specifically for invitados.
+  async createInvitado(requesterId: string, body: { name: string; lastName: string; email: string }) {
+    const teacher = await this.usersRepository.findById(requesterId);
+    if (!teacher || teacher.role !== 'teacher') {
+      throw new ForbiddenException('Only a teacher can create invitados');
+    }
+    if (!body?.name?.trim() || !body?.lastName?.trim() || !body?.email?.trim()) {
+      throw new BadRequestException('Name, last name and email are required');
+    }
+
+    const existing = await this.usersRepository.findByEmail(body.email.trim());
+    if (existing) {
+      throw new BadRequestException('User already exists');
+    }
+
+    const plainPassword = this.generateGuestPassword();
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
+
+    const invitado = await this.usersRepository.save({
+      name: body.name.trim(),
+      lastName: body.lastName.trim(),
+      email: body.email.trim(),
+      password: hashedPassword,
+      role: 'invitado',
+      language: teacher.language,
+      teacher,
+      createdAt: new Date(),
+    } as User);
+
+    await this.usersRepository.createUnreadGlobalMessageRow(invitado);
+    await this.conversationsService.autoJoinLegacyRooms({
+      id: invitado.id,
+      role: invitado.role,
+      language: invitado.language,
+    });
+
+    // Credentials arrive by email, same channel every other role gets
+    // (AuthService.register / MailService.sendUserWelcomeEmail) — an
+    // invitado never goes through /auth/register itself, so this has to be
+    // triggered explicitly here instead of being inherited for free.
+    // Best-effort: the DM below repeats the same credentials, so a
+    // transient mail-provider failure shouldn't block the whole invitado
+    // from being created (register() elsewhere doesn't have that fallback,
+    // which is why it lets the same failure abort the request).
+    try {
+      await this.mailService.sendUserWelcomeEmail(invitado.name, invitado.email, plainPassword);
+    } catch (err) {
+      this.logger.error(`Failed to send invitado welcome email to ${invitado.email}`, err);
+    }
+
+    // The DM is a second, immediate channel so the invitado isn't left not
+    // knowing what to do while the email lands — it doubles as an always-
+    // open line straight to the teacher to coordinate joining a class. Also
+    // repeats the credentials as a fallback in case the email is delayed or
+    // filtered as spam.
+    const conversation = await this.conversationsService.findOrCreateDm(teacher.id, invitado.id);
+    const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    // The teacher is the sender, so this reads as their own message — match
+    // whatever language they currently have active on the platform
+    // (Settings.language), not a hardcoded one. Falls back to the legacy
+    // User.language field (set at account creation) if settings aren't
+    // loaded, then 'en'.
+    const teacherLang = teacher.settings?.language || teacher.language || 'en';
+    const credentialsMessage = this.buildInvitadoCredentialsMessage(teacherLang, {
+      email: invitado.email,
+      password: plainPassword,
+      frontendUrl,
+    });
+
+    const savedMessage = await this.conversationsService.sendMessage({
+      conversationId: conversation.id,
+      senderId: teacher.id,
+      username: `${teacher.name} ${teacher.lastName}`,
+      email: teacher.email,
+      avatarUrl: teacher.avatarUrl,
+      userRole: teacher.role,
+      message: credentialsMessage,
+      timestamp: new Date(),
+    });
+
+    this.gateway.notifyNewConversation([teacher.id, invitado.id], conversation.id);
+    this.gateway.notifyConversationMessage(conversation.id, [teacher.id], savedMessage);
+
+    return {
+      id: invitado.id,
+      name: invitado.name,
+      lastName: invitado.lastName,
+      email: invitado.email,
+      role: invitado.role,
+      createdAt: invitado.createdAt,
+    };
+  }
+
+  async listInvitados(requesterId: string) {
+    const teacher = await this.usersRepository.findById(requesterId);
+    if (!teacher || teacher.role !== 'teacher') {
+      throw new ForbiddenException('Only a teacher can view invitados');
+    }
+    return this.usersRepository.findInvitadosByTeacher(teacher.id);
+  }
+
+  async removeInvitado(requesterId: string, invitadoId: string) {
+    const requester = await this.usersRepository.findById(requesterId);
+    const invitado = await this.usersRepository.findById(invitadoId);
+    if (!invitado || invitado.role !== 'invitado') {
+      throw new NotFoundException('Invitado not found');
+    }
+    const isOwner = requester?.role === 'teacher' && invitado.teacher?.id === requester.id;
+    const isAdmin = requester?.role === 'admin';
+    if (!isOwner && !isAdmin) {
+      throw new ForbiddenException('Not allowed to remove this invitado');
+    }
+    const result = await this.usersRepository.removeById(invitado.id);
+    // removeById already deleted their DM (it's a 1:1 conversation, see
+    // removeById) — without this, the conversation lingers in the requester's
+    // chat list until their next full reload since nothing else tells the
+    // Messages page to refetch. Reuses the same client-side handler
+    // (messages.jsx's "newConversation" listener → fetchConversations) that
+    // the group-delete flow already relies on.
+    this.gateway.notifyNewConversation([requesterId], invitado.id);
+    return result;
   }
 }

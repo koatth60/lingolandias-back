@@ -935,8 +935,10 @@ export class ConversationsRepository {
     const conversationIds: string[] = [];
 
     if (language && ['english', 'spanish', 'polish'].includes(language)) {
-      conversationIds.push(`uuid-${language}`);
-      if (user.role === 'teacher') conversationIds.push(`uuid-teacher-${language}`);
+      // 'invitado' joins the same general-language room as a 'user' —
+      // never the teacher-only room, support, or (for admin) every room.
+      if (user.role === 'teacher') conversationIds.push(`uuid-${language}`, `uuid-teacher-${language}`);
+      else if (user.role === 'user' || user.role === 'invitado') conversationIds.push(`uuid-${language}`);
     }
     if (user.role === 'teacher' || user.role === 'admin') {
       conversationIds.push('uuid-support');

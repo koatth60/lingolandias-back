@@ -66,6 +66,31 @@ export class UsersRepository {
     return this.usersRepository.save(newUser);
   }
 
+  // Mirrors the zeroed UnreadGlobalMessage row AuthService.register creates
+  // for every new account — needed so the legacy global-chat unread counters
+  // (generalEnglishRoom, etc.) have a row to increment/read for an invitado
+  // too, same as any other role.
+  async createUnreadGlobalMessageRow(user: User): Promise<void> {
+    const unreadGlobalMessage = new UnreadGlobalMessage();
+    unreadGlobalMessage.user = user;
+    unreadGlobalMessage.randomRoom = 0;
+    unreadGlobalMessage.generalEnglishRoom = 0;
+    unreadGlobalMessage.teachersEnglishRoom = 0;
+    unreadGlobalMessage.generalSpanishRoom = 0;
+    unreadGlobalMessage.teachersSpanishRoom = 0;
+    unreadGlobalMessage.generalPolishRoom = 0;
+    unreadGlobalMessage.teachersPolishRoom = 0;
+    await this.unReadGlobalMessageRepo.save(unreadGlobalMessage);
+  }
+
+  async findInvitadosByTeacher(teacherId: string): Promise<Partial<User>[]> {
+    return this.usersRepository.find({
+      select: ['id', 'name', 'lastName', 'email', 'avatarUrl', 'createdAt', 'role'],
+      where: { role: 'invitado', teacher: { id: teacherId } },
+      order: { name: 'ASC' },
+    });
+  }
+
   async login(email: string, password: string): Promise<User | undefined> {
     const user = await this.usersRepository.findOne({
       where: { email },
@@ -233,6 +258,43 @@ export class UsersRepository {
       // settings, push_subscriptions and schedules (student + teacher) all have
       // ON DELETE CASCADE in the DB, so this single delete cleans those up too.
       const deletedUser = await manager.delete(User, { email });
+      return deletedUser;
+    });
+  }
+
+  // Same cleanup as remove(email), keyed by id — used by the teacher-facing
+  // invitado deletion flow, which only ever has the invitado's id on hand
+  // (not typed in by hand like the admin's email-based delete form). Also
+  // tears down every conversation this user was in (their credentials DM
+  // with the teacher, chiefly) the same way removeStudentsFromTeacher does —
+  // otherwise it'd survive the user row being gone and show a "Deleted
+  // user" ghost thread in the teacher's Messages forever.
+  async removeById(id: string): Promise<any> {
+    return this.dataSource.transaction(async (manager) => {
+      const user = await manager.findOne(User, { where: { id } });
+      if (!user) {
+        return 'no user found';
+      }
+
+      const memberships = await manager.find(ConversationMember, {
+        where: { userId: id },
+        select: ['conversationId'],
+      });
+      for (const { conversationId } of memberships) {
+        const memberCount = await manager.count(ConversationMember, { where: { conversationId } });
+        if (memberCount <= 2) {
+          await manager.delete(Message, { conversationId });
+          await manager.delete(ArchivedMessage, { conversationId });
+          await manager.delete(ConversationMember, { conversationId });
+          await manager.delete(Conversation, { id: conversationId });
+        } else {
+          await manager.delete(ConversationMember, { conversationId, userId: id });
+        }
+      }
+
+      await manager.delete(UnreadGlobalMessage, { user: { id: user.id } });
+      await manager.delete(TrelloBoard, { userId: user.id });
+      const deletedUser = await manager.delete(User, { id });
       return deletedUser;
     });
   }

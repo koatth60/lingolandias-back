@@ -286,6 +286,24 @@ export class VideoCallsGateway
     this.server.emit('studentRemoved', payload);
   }
 
+  // Server-initiated conversation + first message (e.g. the credentials
+  // message sent when a teacher creates an invitado) — mirrors what
+  // handleNewConversationCreated/handleSendConversationMessage broadcast for
+  // a client-initiated one, so both sides' chat list/open window update live
+  // even though this one was never sent through a socket.
+  notifyNewConversation(memberIds: string[], conversationId: string) {
+    this.emitToUsers(memberIds, 'newConversation', { conversationId });
+  }
+
+  notifyConversationMessage(conversationId: string, recipientIds: string[], message: any) {
+    this.server.to(conversationId).emit('conversationMessage', message);
+    this.emitToUsers(recipientIds, 'newConversationMessage', {
+      conversationId,
+      preview: message.message?.slice(0, 80),
+      sender: message.username,
+    });
+  }
+
   @SubscribeMessage('join')
   async handleJoinRoom(socket: Socket, data: { username: string; room: string }) {
     try {

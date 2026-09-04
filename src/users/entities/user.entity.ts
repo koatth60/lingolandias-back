@@ -65,7 +65,7 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   phone: string;
 
-  @Column({ type: 'enum', enum: ['user', 'teacher', 'admin'], default: 'user' })
+  @Column({ type: 'enum', enum: ['user', 'teacher', 'admin', 'invitado'], default: 'user' })
   role: string;
 
   @Column({ type: 'uuid', default: '123e4567-e89b-12d3-a456-426614174000' })

@@ -9,6 +9,7 @@ import {
   Patch,
   Param,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
@@ -100,6 +101,24 @@ export class UsersController {
   @HttpCode(HttpStatus.OK)
   assignStudent(@Body() body: any) {
     return this.usersService.assignStudent(body);
+  }
+
+  @Post('invitados')
+  @HttpCode(HttpStatus.CREATED)
+  createInvitado(@Req() req: any, @Body() body: any) {
+    return this.usersService.createInvitado(req.user.id, body);
+  }
+
+  @Get('invitados')
+  @HttpCode(HttpStatus.OK)
+  listInvitados(@Req() req: any) {
+    return this.usersService.listInvitados(req.user.id);
+  }
+
+  @Delete('invitados/:id')
+  @HttpCode(HttpStatus.OK)
+  removeInvitado(@Req() req: any, @Param('id') id: string) {
+    return this.usersService.removeInvitado(req.user.id, id);
   }
 
   // @Get(':id')

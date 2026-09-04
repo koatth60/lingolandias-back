@@ -88,4 +88,12 @@ export class ConversationsService {
   syncCoTeachers(conversationId: string) {
     return this.conversationsRepository.syncCoTeachers(conversationId);
   }
+
+  autoJoinLegacyRooms(user: { id: string; role: string; language?: string }) {
+    return this.conversationsRepository.autoJoinLegacyRooms(user);
+  }
+
+  sendMessage(message: Parameters<ConversationsRepository['saveMessage']>[0]) {
+    return this.conversationsRepository.saveMessage(message);
+  }
 }
