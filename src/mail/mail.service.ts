@@ -83,6 +83,28 @@ export class MailService {
     }
   }
 
+  public async sendCardDueReminderEmail(data: {
+    name: string;
+    email: string;
+    cardName: string;
+    boardName: string;
+    listName: string;
+    dueDate: string;
+    boardUrl: string;
+  }) {
+    try {
+      await this.mailerService.sendMail({
+        to: data.email,
+        subject: `Due soon: ${data.cardName}`,
+        template: './card-due-reminder',
+        context: data,
+      });
+      this.logger.log(`Card due reminder email sent to ${data.email}`);
+    } catch (error) {
+      this.logger.error(`Failed to send card due reminder email to ${data.email}`, error.stack);
+    }
+  }
+
   public async sendContactEmail(data: {
     name: string;
     number?: string;

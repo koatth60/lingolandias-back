@@ -12,12 +12,16 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { TrelloService } from './trello.service';
+import { TrelloImportService } from './trello-import.service';
 import { AuthGuard } from '../auth/guards/auth.guard';
 
 @UseGuards(AuthGuard)
 @Controller('trello')
 export class TrelloController {
-  constructor(private readonly trelloService: TrelloService) {}
+  constructor(
+    private readonly trelloService: TrelloService,
+    private readonly trelloImportService: TrelloImportService,
+  ) {}
 
   // ─── BOARDS ──────────────────────────────────────────────────────────────
 
@@ -147,6 +151,24 @@ export class TrelloController {
   ) {
     await this.trelloService.reorderCards(listId, orderedIds);
     return { success: true };
+  }
+
+  // ─── IMPORT FROM REAL TRELLO ────────────────────────────────────────────
+  // Migration tool, not a live sync — the token is only ever passed through
+  // per-request, never stored server-side.
+
+  @Get('import/remote-boards')
+  async getRemoteBoards(@Query('token') token: string) {
+    const boards = await this.trelloImportService.listRemoteBoards(token);
+    return { success: true, boards };
+  }
+
+  @Post('import/board')
+  async importBoard(
+    @Body() body: { userId: string; token: string; remoteBoardId: string },
+  ) {
+    const board = await this.trelloImportService.importBoard(body.userId, body.token, body.remoteBoardId);
+    return { success: true, board };
   }
 
   // ─── ADMIN ───────────────────────────────────────────────────────────────

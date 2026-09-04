@@ -94,6 +94,16 @@ export class PushService {
     await this.sendPush(userId, title, params.preview, '/messages');
   }
 
+  // Board owner's heads-up that one of their Trello 2.0 cards is due soon —
+  // caller (TrelloReminderService) has already checked cardDueReminders is
+  // enabled for this user before calling.
+  async sendCardDueReminder(
+    userId: string,
+    params: { cardName: string; boardName: string },
+  ) {
+    await this.sendPush(userId, `Due soon: ${params.cardName}`, `In "${params.boardName}"`, '/trello');
+  }
+
   private async sendPush(userId: string, title: string, body: string, url = '/') {
     const subscription = await this.subscriptionRepository.findOne({
       where: { userId },

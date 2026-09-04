@@ -1,9 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { TrelloBoard } from './entities/trello-board.entity';
 import { TrelloList } from './entities/trello-list.entity';
 import { TrelloCard } from './entities/trello-card.entity';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class TrelloService {
@@ -15,6 +16,8 @@ export class TrelloService {
     private listRepo: Repository<TrelloList>,
     @InjectRepository(TrelloCard)
     private cardRepo: Repository<TrelloCard>,
+    @InjectRepository(User)
+    private userRepo: Repository<User>,
   ) {}
 
   // ─── BOARDS ──────────────────────────────────────────────────────────────
@@ -26,9 +29,26 @@ export class TrelloService {
     });
   }
 
-  async getAllBoardsWithTeachers(): Promise<TrelloBoard[]> {
-    return this.boardRepo.find({
+  // Resolves the owner's name/role directly here instead of leaving the
+  // frontend to cross-reference a separate teachers-only user list — that
+  // list excludes admins, so any board owned by an admin (they can access
+  // /trello too) used to show up as a raw UUID in the admin panel.
+  async getAllBoardsWithTeachers(): Promise<(TrelloBoard & { ownerName: string; ownerRole: string | null })[]> {
+    const boards = await this.boardRepo.find({
       order: { userId: 'ASC', position: 'ASC' },
+    });
+    const userIds = [...new Set(boards.map((b) => b.userId))];
+    const owners = userIds.length
+      ? await this.userRepo.find({ where: { id: In(userIds) }, select: ['id', 'name', 'lastName', 'role'] })
+      : [];
+    const ownerById = new Map(owners.map((u) => [u.id, u]));
+    return boards.map((board) => {
+      const owner = ownerById.get(board.userId);
+      return {
+        ...board,
+        ownerName: owner ? `${owner.name} ${owner.lastName}`.trim() : 'Unknown user',
+        ownerRole: owner?.role ?? null,
+      };
     });
   }
 
@@ -108,7 +128,11 @@ export class TrelloService {
     id: string,
     data: Partial<{ name: string; description: string; dueDate: Date; label: string; listId: string; position: number; checklist: string; comments: string; titleStyle: string }>,
   ): Promise<TrelloCard> {
-    const result = await this.cardRepo.update(id, data);
+    // Editing the due date (including clearing it) re-arms the due-soon
+    // reminder — otherwise pushing a card's date out would silently never
+    // notify again since TrelloReminderService only looks at reminderSent=false.
+    const payload = 'dueDate' in data ? { ...data, reminderSent: false } : data;
+    const result = await this.cardRepo.update(id, payload);
     if (result.affected === 0) throw new NotFoundException('Card not found');
     return this.cardRepo.findOne({ where: { id } });
   }

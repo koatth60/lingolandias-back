@@ -24,4 +24,8 @@ export class UpdateSettingsDto {
   @IsBoolean()
   @IsOptional()
   watchedTutorial?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  cardDueReminders?: boolean;
 }

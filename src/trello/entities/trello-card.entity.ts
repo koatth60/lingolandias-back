@@ -49,6 +49,12 @@ export class TrelloCard {
   @Column({ type: 'text', nullable: true })
   titleStyle: string; // JSON: {fontFamily,fontSize,color,fontWeight,fontStyle}
 
+  // Set once TrelloReminderService has notified the board owner this card is
+  // due soon — prevents re-notifying every cron tick. Reset to false whenever
+  // dueDate changes (see TrelloService.updateCard) so editing the date re-arms it.
+  @Column({ type: 'boolean', default: false })
+  reminderSent: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 
