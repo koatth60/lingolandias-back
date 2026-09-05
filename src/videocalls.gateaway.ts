@@ -415,8 +415,31 @@ export class VideoCallsGateway
       if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.room)) return;
       const safe = this.sanitizeMessage(data.newMessage);
       if (!safe.trim()) return;
-      await this.chatsRepository.editGlobalChat(data.messageId, safe);
-      this.server.to(data.room).emit('globalChatEdited', { messageId: data.messageId, newMessage: safe });
+      const editedAt = new Date();
+      await this.chatsRepository.editGlobalChat(data.messageId, safe, editedAt);
+      this.server.to(data.room).emit('globalChatEdited', { messageId: data.messageId, newMessage: safe, editedAt });
+    } catch (_) {}
+  }
+
+  @SubscribeMessage('toggleGlobalChatReaction')
+  async handleToggleGlobalChatReaction(
+    socket: Socket,
+    data: { messageId: string; room: string; emoji: string; userName?: string },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) return;
+      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.room)) return;
+      const userId = this.resolveSocketUserId(socket);
+      if (!userId) return;
+      const emoji = (data.emoji || '').trim().slice(0, 8);
+      if (!emoji) return;
+      const userName = (data.userName || '').trim().slice(0, 100) || 'Someone';
+      const reactions = await this.chatsRepository.toggleGlobalChatReaction(data.messageId, userId, userName, emoji);
+      this.server.to(data.room).emit('globalChatReactionUpdated', {
+        room: data.room,
+        messageId: data.messageId,
+        reactions,
+      });
     } catch (_) {}
   }
 
@@ -609,13 +632,15 @@ export class VideoCallsGateway
       message: string;
       userRole?: string;
       userUrl?: string;
+      fileUrl?: string;
+      replyTo?: { id: string; message: string; username: string } | null;
     },
   ) {
     try {
       if (!this.isAuthenticated(socket)) return;
       if (this.isRateLimited(socket.id)) return;
 
-      const safe = this.sanitizeMessage(data.message);
+      const safe = this.sanitizeMessage(data.message || '');
 
       const globalChatData = new GlobalChat();
       globalChatData.username = data.username?.slice(0, 100) || 'User';
@@ -625,6 +650,8 @@ export class VideoCallsGateway
       globalChatData.timestamp = new Date();
       if (data.userRole) globalChatData.userRole = data.userRole;
       if (data.userUrl) globalChatData.userUrl = data.userUrl;
+      if (data.fileUrl) globalChatData.fileUrl = data.fileUrl;
+      if (data.replyTo) globalChatData.replyTo = data.replyTo;
 
       await this.chatsRepository.saveGlobalChat(globalChatData);
 

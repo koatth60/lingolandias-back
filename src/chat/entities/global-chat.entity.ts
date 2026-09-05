@@ -45,6 +45,19 @@ export class GlobalChat {
   @CreateDateColumn({ type: 'timestamp' })
   timestamp: Date;
 
+  @Column({ type: 'timestamp', nullable: true })
+  editedAt?: Date;
+
+  @Column({ type: 'jsonb', nullable: true })
+  replyTo?: { id: string; message: string; username: string } | null;
+
+  // Emoji -> who reacted with it (id + display name) — same shape as
+  // Message.reactions in the unified conversation model, kept separate here
+  // since global-chats (support/general rooms) predates and isn't part of
+  // that model.
+  @Column({ type: 'jsonb', nullable: true })
+  reactions?: Record<string, { id: string; name: string }[]> | null;
+
   // @OneToMany(
   //   () => UnreadGlobalMessage,
   //   (unreadMessage) => unreadMessage.message,

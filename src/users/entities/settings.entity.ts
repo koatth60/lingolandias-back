@@ -40,6 +40,18 @@ export class Settings {
   @Column({ type: 'boolean', default: false })
   cardDueReminders: boolean;
 
+  // Crash-course video tutorial (src/sections/course.jsx) — replaces the old
+  // single-video watchedTutorial modal. Map of videoId -> true for every
+  // video the user has finished (or manually marked as watched).
+  @Column({ type: 'jsonb', default: {} })
+  courseProgress: Record<string, boolean>;
+
+  // Whether the one-time "there's a new course" banner on the Home page has
+  // already been shown/dismissed. Separate from courseProgress so it stops
+  // nagging returning users even if they never actually open the course.
+  @Column({ type: 'boolean', default: false })
+  courseAnnouncementSeen: boolean;
+
   @OneToOne(() => User, (user) => user.settings, {
   onDelete: 'CASCADE'  
 })

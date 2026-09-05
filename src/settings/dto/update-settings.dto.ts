@@ -1,4 +1,4 @@
-import { IsBoolean, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsObject, IsOptional, IsString } from 'class-validator';
 
 export class UpdateSettingsDto {
   @IsBoolean()
@@ -28,4 +28,12 @@ export class UpdateSettingsDto {
   @IsBoolean()
   @IsOptional()
   cardDueReminders?: boolean;
+
+  @IsObject()
+  @IsOptional()
+  courseProgress?: Record<string, boolean>;
+
+  @IsBoolean()
+  @IsOptional()
+  courseAnnouncementSeen?: boolean;
 }

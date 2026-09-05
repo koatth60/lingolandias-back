@@ -112,12 +112,32 @@ export class ChatsRepository {
   }
 
   // Edit a global chat message
-  async editGlobalChat(id: string, message: string): Promise<void> {
+  async editGlobalChat(id: string, message: string, editedAt: Date): Promise<void> {
     try {
-      await this.globalChatRepository.update(id, { message });
+      await this.globalChatRepository.update(id, { message, editedAt });
     } catch (error) {
       throw new InternalServerErrorException('Failed to edit global chat');
     }
+  }
+
+  // Toggle a reaction on a global chat message — mirrors
+  // ConversationsRepository.toggleReaction, adapted to GlobalChat.
+  async toggleGlobalChatReaction(
+    messageId: string,
+    userId: string,
+    userName: string,
+    emoji: string,
+  ): Promise<Record<string, { id: string; name: string }[]>> {
+    const msg = await this.globalChatRepository.findOneBy({ id: messageId });
+    if (!msg) return {};
+    const reactions: Record<string, { id: string; name: string }[]> = { ...(msg.reactions || {}) };
+    const current = reactions[emoji] || [];
+    const already = current.some((r) => r.id === userId);
+    const next = already ? current.filter((r) => r.id !== userId) : [...current, { id: userId, name: userName }];
+    if (next.length) reactions[emoji] = next;
+    else delete reactions[emoji];
+    await this.globalChatRepository.update(messageId, { reactions });
+    return reactions;
   }
 
   async saveUnreadMessage(body: any) {
