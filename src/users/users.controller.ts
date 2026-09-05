@@ -23,8 +23,11 @@ export class UsersController {
 
   @Get()
   @HttpCode(HttpStatus.OK)
-  findAll() {
-    return this.usersService.findAll();
+  findAll(@Query() query: any) {
+    return this.usersService.findAll({
+      page: parseInt(query.page) || 1,
+      limit: Math.min(parseInt(query.limit) || 50, 200),
+    });
   }
 
   @Get('admin-dashboard')

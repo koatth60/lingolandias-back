@@ -111,7 +111,8 @@ export class UsersRepository {
     return await this.usersRepository.save(user);
   }
 
-  async findAll(): Promise<User[]> {
+  async findAll(params: { page: number; limit: number }): Promise<User[]> {
+    const { page, limit } = params;
     const users = await this.usersRepository.find({
       relations: [
         'students',
@@ -120,6 +121,9 @@ export class UsersRepository {
         'teacherSchedules',
         'settings',
       ],
+      order: { createdAt: 'ASC' },
+      skip: (page - 1) * limit,
+      take: limit,
     });
 
     return users;

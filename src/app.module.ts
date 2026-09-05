@@ -19,6 +19,7 @@ import { ClassSessionsModule } from './class-sessions/class-sessions.module';
 import { MeetingLogsModule } from './meeting-logs/meeting-logs.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ConversationsModule } from './conversations/conversations.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { ConversationsModule } from './conversations/conversations.module';
     ClassSessionsModule,
     MeetingLogsModule,
     ConversationsModule,
+    HealthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

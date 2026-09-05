@@ -43,8 +43,8 @@ export class UsersService {
     return candidates.filter((c) => studentIds.has(c.id));
   }
 
-  async findAll() {
-    const users = await this.usersRepository.findAll();
+  async findAll(params: { page: number; limit: number }) {
+    const users = await this.usersRepository.findAll(params);
     if (!users || users.length === 0) {
       throw new NotFoundException('No users found');
     }

@@ -18,6 +18,6 @@
     "forceConsistentCasingInFileNames": false,
     "noFallthroughCasesInSwitch": false,
     "resolveJsonModule": true,
-    "types": ["multer", "express", "node"], 
+    "types": ["multer", "express", "node", "jest"],
   }
 }
