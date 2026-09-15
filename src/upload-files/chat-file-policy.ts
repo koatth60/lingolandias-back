@@ -29,6 +29,35 @@ const BLOCKED_EXTENSIONS = new Set([
 
 export const MAX_FILENAME_LENGTH = 180;
 
+/**
+ * Hard ceiling for a chat attachment, enforced by S3 itself (the presign signs
+ * ContentLength, so a client that understates the size cannot upload more —
+ * verified against the real bucket).
+ *
+ * 2 GiB. Rationale: the largest thing a teacher legitimately shares is a class
+ * recording, and an hour of 1080p screen capture lands around 0.5-1.5 GB, so
+ * this clears real material with headroom. It also stays well inside S3's 5 GB
+ * limit for a single PUT, which is what the direct-upload path uses — going
+ * higher would mean implementing multipart upload in the browser for files
+ * nobody sends.
+ *
+ * This is an anti-abuse ceiling, not a product limit: without it the endpoint
+ * would hand any logged-in student unlimited signed writes into a billable
+ * bucket.
+ */
+export const MAX_CHAT_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * The size a client declares at presign time. Must be a real, positive,
+ * whole number of bytes within the ceiling — anything else is refused before
+ * a URL is signed.
+ */
+export const isValidUploadSize = (size: unknown): size is number =>
+  typeof size === 'number' &&
+  Number.isInteger(size) &&
+  size > 0 &&
+  size <= MAX_CHAT_UPLOAD_BYTES;
+
 export const getExtension = (filename: string): string => {
   const base = (filename || '').split(/[\\/]/).pop() || '';
   const idx = base.lastIndexOf('.');

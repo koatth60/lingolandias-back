@@ -15,9 +15,14 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import * as os from 'os';
 import * as fs from 'fs';
+import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
-import { isBlockedChatFile } from './chat-file-policy';
+import {
+  isBlockedChatFile,
+  isValidUploadSize,
+  MAX_CHAT_UPLOAD_BYTES,
+} from './chat-file-policy';
 import { S3Service } from './upload-files.service';
 import { UsersRepository } from 'src/users/users.repository';
 import { MeetingLogsService } from 'src/meeting-logs/meeting-logs.service';
@@ -103,24 +108,47 @@ export class UploadController {
    * some clients, .csv, subtitles) and produced a 400 the UI swallowed
    * silently. Only executables are refused now — see chat-file-policy.
    */
-  @UseGuards(AuthGuard)
+  // Rate limited because this hands out signed writes to a billable bucket.
+  // 30 a minute is far above anything a person does by hand (a teacher
+  // attaching a batch of files sends a handful) while stopping a script from
+  // minting them in a loop.
+  @UseGuards(AuthGuard, ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('chat-presign')
   async createChatPresign(
     @Body('filename') filename: string,
     @Body('contentType') contentType: string,
+    @Body('size') size: number,
   ) {
     if (!filename) {
       throw new HttpException('filename is required', HttpStatus.BAD_REQUEST);
     }
     if (isBlockedChatFile(filename)) {
       throw new HttpException(
-        'Executable files cannot be shared in chat',
+        { message: 'Executable files cannot be shared in chat', code: 'file_type_blocked' },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (!isValidUploadSize(size)) {
+      throw new HttpException(
+        {
+          message: 'File is too large',
+          code: 'file_too_large',
+          maxBytes: MAX_CHAT_UPLOAD_BYTES,
+        },
         HttpStatus.BAD_REQUEST,
       );
     }
 
     try {
-      return await this.s3Service.createChatUploadPresign(filename, contentType);
+      return await this.s3Service.createChatUploadPresign(
+        filename,
+        // Signed and returned to the client, which must send back this exact
+        // value as the PUT's Content-Type. Defaulting here rather than letting
+        // the two sides each decide keeps them from disagreeing.
+        contentType || 'application/octet-stream',
+        size,
+      );
     } catch (error) {
       console.error('Chat presign error:', error);
       throw new HttpException(
@@ -132,10 +160,10 @@ export class UploadController {
 
   /**
    * Fallback for clients that can't complete a presigned PUT (bucket CORS
-   * blocked, presign endpoint unreachable). Streams to a temp file instead of
-   * buffering in memory, and sets no multer size limit — the ceiling here is
-   * nginx's client_max_body_size, which is why this is the fallback and not
-   * the main path.
+   * blocked, presign endpoint unreachable, S3 refusing the PUT). Streams to a
+   * temp file instead of buffering in memory. This path is still bounded by
+   * nginx's client_max_body_size on top of the limit below, which is why it is
+   * the fallback and not the main path.
    */
   @UseGuards(AuthGuard)
   @Post('chat-upload')
@@ -145,6 +173,9 @@ export class UploadController {
         destination: (_req, _file, cb) => cb(null, os.tmpdir()),
         filename: (_req, _file, cb) => cb(null, `lingo-chat-${Date.now()}`),
       }),
+      // Same ceiling as the presigned path — otherwise this route is simply
+      // the way around it.
+      limits: { fileSize: MAX_CHAT_UPLOAD_BYTES },
     }),
   )
   async uploadChatFile(@UploadedFile() file: Express.Multer.File) {

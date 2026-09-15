@@ -1,4 +1,6 @@
 import {
+  isValidUploadSize,
+  MAX_CHAT_UPLOAD_BYTES,
   buildChatFileKey,
   buildPublicUrl,
   getExtension,
@@ -101,6 +103,28 @@ describe('chat file policy', () => {
     it('prefixes with a timestamp so repeated names do not collide', () => {
       const key = buildChatFileKey('a.pdf');
       expect(key).toMatch(/^chat-uploads\/\d+-a\.pdf$/);
+    });
+  });
+  describe('isValidUploadSize', () => {
+    it('accepts an ordinary attachment', () => {
+      expect(isValidUploadSize(25 * 1024 * 1024)).toBe(true);
+    });
+
+    it('accepts a file exactly on the limit', () => {
+      expect(isValidUploadSize(MAX_CHAT_UPLOAD_BYTES)).toBe(true);
+    });
+
+    it('refuses a file one byte over the limit', () => {
+      expect(isValidUploadSize(MAX_CHAT_UPLOAD_BYTES + 1)).toBe(false);
+    });
+
+    // A missing or nonsense size must not slip through and get signed: the
+    // signature is what makes the ceiling enforceable, so an unsigned or
+    // zero length would hand out an unbounded write.
+    it('refuses a missing, zero, negative, fractional or non-numeric size', () => {
+      [undefined, null, 0, -1, 1.5, '100', NaN, Infinity].forEach((value) =>
+        expect(isValidUploadSize(value as any)).toBe(false),
+      );
     });
   });
 });

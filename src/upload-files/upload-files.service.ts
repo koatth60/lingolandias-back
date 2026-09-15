@@ -67,15 +67,25 @@ export class S3Service {
    * The key is decided (and signed) here rather than by the client so a
    * caller can't choose where in the bucket their object lands.
    */
-  async createChatUploadPresign(filename: string, contentType?: string) {
+  async createChatUploadPresign(
+    filename: string,
+    contentType: string,
+    size: number,
+  ) {
     const bucketName = this.configService.get('AWS_BUCKET_NAME');
     const region = this.configService.get('AWS_REGION');
     const fileKey = buildChatFileKey(filename);
 
+    // ContentLength is part of the signature (SignedHeaders becomes
+    // "content-length;host"), which is what makes the size limit real rather
+    // than advisory: a client that declares 1 KB and then PUTs 1 MB gets a 403
+    // SignatureDoesNotMatch from S3. Validating only in the browser would stop
+    // nobody, since the presign response is just JSON anyone can replay.
     const command = new PutObjectCommand({
       Bucket: bucketName,
       Key: fileKey,
-      ContentType: contentType || 'application/octet-stream',
+      ContentType: contentType,
+      ContentLength: size,
     });
 
     // 6 hours: a slow phone uploading a long class recording over mobile data
