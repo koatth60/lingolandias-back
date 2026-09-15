@@ -813,16 +813,23 @@ export class VideoCallsGateway
       userRole?: string;
       replyTo?: { id: string; message: string; username: string } | null;
       messageType?: string;
+      // Client-generated id for the optimistic placeholder this send is for
+      // (see useConversationChat's sendMessage). Echoed back on every
+      // chatError below so the client can fail just THIS message instead of
+      // every pending one — with several messages in flight, one real
+      // rejection used to mark all of them failed since chatError carried no
+      // way to tell them apart.
+      tempId?: string;
     },
   ) {
     try {
       if (!this.isAuthenticated(socket)) {
-        socket.emit('chatError', { reason: 'not_authenticated' });
+        socket.emit('chatError', { reason: 'not_authenticated', tempId: data?.tempId });
         return;
       }
       if (!this.isValidRoom(data.conversationId)) return;
       if (this.isRateLimited(socket.id)) {
-        socket.emit('chatError', { reason: 'rate_limited' });
+        socket.emit('chatError', { reason: 'rate_limited', tempId: data.tempId });
         return;
       }
 
@@ -833,12 +840,12 @@ export class VideoCallsGateway
       // post into any conversation under any member's name.
       const senderId = this.resolveSocketUserId(socket);
       if (!senderId) {
-        socket.emit('chatError', { reason: 'not_authenticated' });
+        socket.emit('chatError', { reason: 'not_authenticated', tempId: data.tempId });
         return;
       }
       const isMember = await this.conversationsRepository.isMember(data.conversationId, senderId);
       if (!isMember) {
-        socket.emit('chatError', { reason: 'not_a_member' });
+        socket.emit('chatError', { reason: 'not_a_member', tempId: data.tempId });
         return;
       }
 
@@ -916,7 +923,7 @@ export class VideoCallsGateway
         `handleSendConversationMessage error conversationId=${data?.conversationId} socket=${socket.id}`,
         err,
       );
-      socket.emit('chatError', { reason: 'server_error' });
+      socket.emit('chatError', { reason: 'server_error', tempId: data?.tempId });
     }
   }
 

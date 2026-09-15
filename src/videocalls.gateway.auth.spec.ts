@@ -281,3 +281,113 @@ describe('VideoCallsGateway — room membership', () => {
     expect(socket.rooms.has(OTHER_CONVERSATION)).toBe(true);
   });
 });
+
+describe('VideoCallsGateway — chatError carries the tempId of the message it rejected', () => {
+  // With several messages in flight, a chatError with no way to name which
+  // one it was about used to fail all of them — the client had no choice but
+  // to treat every rejection as global. Each rejection path in
+  // handleSendConversationMessage must echo back the tempId the client sent,
+  // so the client can fail only that one message.
+  const TEMP_ID = 'pending-123-abc';
+
+  it('echoes tempId back on not_a_member', async () => {
+    const repo = baseRepo();
+    repo.isMember.mockResolvedValue(false);
+    const { gateway } = makeGateway(repo);
+    const socket = makeSocket(ATTACKER);
+
+    await gateway.handleSendConversationMessage(socket as any, {
+      conversationId: CONVERSATION,
+      senderId: ATTACKER,
+      username: 'Attacker',
+      email: 'a@example.com',
+      message: 'hi',
+      tempId: TEMP_ID,
+    } as any);
+
+    expect(socket.emit).toHaveBeenCalledWith('chatError', {
+      reason: 'not_a_member',
+      tempId: TEMP_ID,
+    });
+  });
+
+  it('echoes tempId back on rate_limited', async () => {
+    const repo = baseRepo();
+    repo.isMember.mockResolvedValue(true);
+    const { gateway } = makeGateway(repo);
+    (gateway as any).isRateLimited = jest.fn().mockReturnValue(true);
+    const socket = makeSocket(VICTIM);
+
+    await gateway.handleSendConversationMessage(socket as any, {
+      conversationId: CONVERSATION,
+      senderId: VICTIM,
+      username: 'Victim',
+      email: 'v@example.com',
+      message: 'hi',
+      tempId: TEMP_ID,
+    } as any);
+
+    expect(socket.emit).toHaveBeenCalledWith('chatError', {
+      reason: 'rate_limited',
+      tempId: TEMP_ID,
+    });
+  });
+
+  it('echoes tempId back on an unauthenticated socket', async () => {
+    const repo = baseRepo();
+    const { gateway } = makeGateway(repo);
+    const socket = makeSocket(undefined);
+
+    await gateway.handleSendConversationMessage(socket as any, {
+      conversationId: CONVERSATION,
+      message: 'hi',
+      tempId: TEMP_ID,
+    } as any);
+
+    expect(socket.emit).toHaveBeenCalledWith('chatError', {
+      reason: 'not_authenticated',
+      tempId: TEMP_ID,
+    });
+  });
+
+  it('echoes tempId back when saveMessage throws (server_error)', async () => {
+    const repo = baseRepo();
+    repo.isMember.mockResolvedValue(true);
+    repo.saveMessage.mockRejectedValue(new Error('db down'));
+    const { gateway } = makeGateway(repo);
+    const socket = makeSocket(VICTIM);
+
+    await gateway.handleSendConversationMessage(socket as any, {
+      conversationId: CONVERSATION,
+      senderId: VICTIM,
+      username: 'Victim',
+      email: 'v@example.com',
+      message: 'hi',
+      tempId: TEMP_ID,
+    } as any);
+
+    expect(socket.emit).toHaveBeenCalledWith('chatError', {
+      reason: 'server_error',
+      tempId: TEMP_ID,
+    });
+  });
+
+  it('works when the client sends no tempId at all (tempId comes back undefined, not omitted-and-crashing)', async () => {
+    const repo = baseRepo();
+    repo.isMember.mockResolvedValue(false);
+    const { gateway } = makeGateway(repo);
+    const socket = makeSocket(ATTACKER);
+
+    await expect(
+      gateway.handleSendConversationMessage(socket as any, {
+        conversationId: CONVERSATION,
+        senderId: ATTACKER,
+        username: 'Attacker',
+        email: 'a@example.com',
+        message: 'hi',
+      } as any),
+    ).resolves.not.toThrow();
+
+    expect(socket.emit).toHaveBeenCalledWith('chatError', { reason: 'not_a_member' });
+  });
+});
