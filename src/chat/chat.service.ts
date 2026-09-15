@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { Chat } from './entities/chat.entity';
 import { ChatsRepository } from './chats.repository';
 import { GlobalChat } from './entities/global-chat.entity';
 import { UnreadGlobalMessage } from './entities/unread-global-messages.entity';
@@ -9,13 +8,6 @@ import { ArchivedChat } from './entities/archived-chat.entity';
 @Injectable()
 export class ChatService {
   constructor(private readonly chatsRepositoy: ChatsRepository) {}
-  async getChats(room: string): Promise<Chat[]> {
-    return this.chatsRepositoy.getChats(room);
-  }
-
-  async readChat(room: string, email: string): Promise<void> {
-    return this.chatsRepositoy.readChat(room, email);
-  }
 
   async getGlobalChats(room: string): Promise<GlobalChat[]> {
     return this.chatsRepositoy.getGlobalChats(room);
@@ -23,10 +15,6 @@ export class ChatService {
 
   async deleteGlobalChat(id: string): Promise<void> {
     return this.chatsRepositoy.deleteGlobalChat(id);
-  }
-
-  async deleteNormalChat(id: string): Promise<void> {
-    return this.chatsRepositoy.deleteNormalChat(id);
   }
 
   async getUnreadGlobalMessages(id: string): Promise<UnreadGlobalMessage[]> {
@@ -50,12 +38,5 @@ export class ChatService {
     room: string,
   ): Promise<{ chatsDeleted: number; archivedChatsDeleted: number }> {
     return this.chatsRepositoy.deleteChatsByRoom(room);
-  }
-
-  async getTeacherRoomSummary(
-    rooms: string[],
-    teacherEmail: string,
-  ): Promise<{ lastMessages: Record<string, any>; unreadCounts: Record<string, number> }> {
-    return this.chatsRepositoy.getTeacherRoomSummary(rooms, teacherEmail);
   }
 }
