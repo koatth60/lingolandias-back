@@ -3,6 +3,7 @@ import { NestFactory, HttpAdapterHost } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { SentryExceptionFilter } from './common/sentry-exception.filter';
 import helmet from 'helmet';
+import { allowedOrigins } from './common/cors-origins';
 const PORT = 2000;
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -21,9 +22,10 @@ async function bootstrap() {
   );
 
   app.enableCors({
-    origin: '*',
+    origin: allowedOrigins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     allowedHeaders: 'Content-Type, Authorization',
+    credentials: true,
   });
 
   await app.listen(2000, () => {

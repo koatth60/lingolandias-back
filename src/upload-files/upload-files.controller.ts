@@ -7,6 +7,7 @@ import {
   UploadedFile,
   Body,
   UseInterceptors,
+  UseGuards,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
@@ -14,6 +15,9 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import * as os from 'os';
 import * as fs from 'fs';
+import { AuthGuard } from '../auth/guards/auth.guard';
+import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+import { isBlockedChatFile } from './chat-file-policy';
 import { S3Service } from './upload-files.service';
 import { UsersRepository } from 'src/users/users.repository';
 import { MeetingLogsService } from 'src/meeting-logs/meeting-logs.service';
@@ -28,11 +32,15 @@ export class UploadController {
     private readonly recordingsRepository: RecordingsRepository,
   ) {}
 
+  // `userId` is taken from the token, not the request body: the body value
+  // was never checked against the caller, so anyone logged in could overwrite
+  // anyone else's profile picture by posting their id.
+  @UseGuards(AuthGuard)
   @Post('file')
   @UseInterceptors(FileInterceptor('file'))
   async uploadFile(
     @UploadedFile() file: Express.Multer.File,
-    @Body('userId') userId: string,
+    @CurrentUser('id') userId: string,
   ) {
     if (!file) {
       throw new HttpException('No file provided', HttpStatus.BAD_REQUEST);
@@ -56,11 +64,12 @@ export class UploadController {
     }
   }
 
+  @UseGuards(AuthGuard)
   @Post('cover')
   @UseInterceptors(FileInterceptor('file'))
   async uploadCover(
     @UploadedFile() file: Express.Multer.File,
-    @Body('userId') userId: string,
+    @CurrentUser('id') userId: string,
   ) {
     if (!file) {
       throw new HttpException('No file provided', HttpStatus.BAD_REQUEST);
@@ -84,45 +93,69 @@ export class UploadController {
     }
   }
 
-  @Post('chat-upload')
-  @UseInterceptors(FileInterceptor('file'))
-  async uploadChatFile(
-    @UploadedFile() file: Express.Multer.File,
-    @Body('userId') userId: string,
+  /**
+   * Primary path for chat attachments. Returns a presigned PUT the browser
+   * uploads to directly, so file size is bounded by nothing in our stack —
+   * not nginx's client_max_body_size, not this process's memory.
+   *
+   * The previous MIME allowlist is gone: it rejected perfectly ordinary
+   * teaching material (any video the browser labelled video/webm, .pptx from
+   * some clients, .csv, subtitles) and produced a 400 the UI swallowed
+   * silently. Only executables are refused now — see chat-file-policy.
+   */
+  @UseGuards(AuthGuard)
+  @Post('chat-presign')
+  async createChatPresign(
+    @Body('filename') filename: string,
+    @Body('contentType') contentType: string,
   ) {
+    if (!filename) {
+      throw new HttpException('filename is required', HttpStatus.BAD_REQUEST);
+    }
+    if (isBlockedChatFile(filename)) {
+      throw new HttpException(
+        'Executable files cannot be shared in chat',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    try {
+      return await this.s3Service.createChatUploadPresign(filename, contentType);
+    } catch (error) {
+      console.error('Chat presign error:', error);
+      throw new HttpException(
+        'Error preparing upload',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Fallback for clients that can't complete a presigned PUT (bucket CORS
+   * blocked, presign endpoint unreachable). Streams to a temp file instead of
+   * buffering in memory, and sets no multer size limit — the ceiling here is
+   * nginx's client_max_body_size, which is why this is the fallback and not
+   * the main path.
+   */
+  @UseGuards(AuthGuard)
+  @Post('chat-upload')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: (_req, _file, cb) => cb(null, os.tmpdir()),
+        filename: (_req, _file, cb) => cb(null, `lingo-chat-${Date.now()}`),
+      }),
+    }),
+  )
+  async uploadChatFile(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
       throw new HttpException('No file provided', HttpStatus.BAD_REQUEST);
     }
 
-    const allowedMimeTypes = [
-      'image/jpeg',
-      'image/png',
-      'application/pdf',
-      'audio/mpeg',
-      'audio/wav',
-      'text/plain',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-powerpoint',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'video/mp4',
-      'audio/mp3',
-      'video/x-msvideo',
-      'video/quicktime',
-      'application/zip',
-      // Voice notes recorded in-browser via MediaRecorder — Chrome/Edge/
-      // Firefox record webm/opus, Safari records mp4/aac.
-      'audio/webm',
-      'audio/ogg',
-      'audio/mp4',
-      'audio/aac',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    ];
-
-    if (!allowedMimeTypes.includes(file.mimetype)) {
+    if (isBlockedChatFile(file.originalname)) {
+      this.discardTempFile(file);
       throw new HttpException(
-        'File type not supported',
+        'Executable files cannot be shared in chat',
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -134,10 +167,21 @@ export class UploadController {
         fileUrl: uploadResult.url,
       };
     } catch (error) {
+      console.error('Chat upload error:', error);
       throw new HttpException(
         'Error uploading file',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
+    } finally {
+      this.discardTempFile(file);
+    }
+  }
+
+  private discardTempFile(file: Express.Multer.File) {
+    try {
+      if (file?.path) fs.unlinkSync(file.path);
+    } catch {
+      /* already gone */
     }
   }
 

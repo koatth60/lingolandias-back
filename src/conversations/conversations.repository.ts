@@ -882,7 +882,17 @@ export class ConversationsRepository {
     return deduped.reverse();
   }
 
-  async getArchivedMessages(conversationId: string, page: number) {
+  // Membership is enforced here for the same reason getMessages enforces it:
+  // this returns real conversation content, and it previously accepted any
+  // conversation id from any authenticated caller with no check at all.
+  async getArchivedMessages(conversationId: string, page: number, userId?: string) {
+    if (!userId) {
+      throw new ForbiddenException('userId is required to read archived messages');
+    }
+    const membership = await this.memberRepo.findOneBy({ conversationId, userId });
+    if (!membership) {
+      throw new ForbiddenException('Not a member of this conversation');
+    }
     return this.archivedRepo
       .createQueryBuilder('am')
       .where('am.conversationId = :conversationId', { conversationId })
@@ -902,6 +912,29 @@ export class ConversationsRepository {
 
   async deleteMessage(id: string) {
     await this.messageRepo.delete(id);
+  }
+
+  /**
+   * Whether `userId` is allowed to edit or delete message `messageId`, and
+   * whether it actually belongs to the conversation the caller named.
+   *
+   * The gateway used to edit/delete purely by message id, with no check at
+   * all — any authenticated user could rewrite or destroy anyone's message
+   * anywhere just by knowing its UUID. Both checks matter: ownership stops
+   * touching someone else's message, and the conversation check stops a
+   * member of conversation A from operating on a message in conversation B
+   * by passing their own conversation id to satisfy a membership test.
+   */
+  async canModifyMessage(
+    messageId: string,
+    conversationId: string,
+    userId: string,
+  ): Promise<boolean> {
+    if (!messageId || !conversationId || !userId) return false;
+    const message = await this.messageRepo.findOneBy({ id: messageId });
+    if (!message) return false;
+    if (message.conversationId !== conversationId) return false;
+    return message.senderId === userId;
   }
 
   async toggleReaction(

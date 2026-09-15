@@ -5,9 +5,11 @@ import {
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createReadStream } from 'fs';
+import { buildChatFileKey, buildPublicUrl } from './chat-file-policy';
 
 @Injectable()
 export class S3Service {
@@ -56,27 +58,72 @@ export class S3Service {
     }
   }
 
+  /**
+   * Hands the browser a short-lived URL it can PUT the file straight to S3
+   * with. This is the primary path for chat attachments: the bytes never
+   * touch nginx or this process, so there is no request-body ceiling and no
+   * per-upload memory cost regardless of how large the file is.
+   *
+   * The key is decided (and signed) here rather than by the client so a
+   * caller can't choose where in the bucket their object lands.
+   */
+  async createChatUploadPresign(filename: string, contentType?: string) {
+    const bucketName = this.configService.get('AWS_BUCKET_NAME');
+    const region = this.configService.get('AWS_REGION');
+    const fileKey = buildChatFileKey(filename);
+
+    const command = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: fileKey,
+      ContentType: contentType || 'application/octet-stream',
+    });
+
+    // 6 hours: a slow phone uploading a long class recording over mobile data
+    // can genuinely take hours, and the URL expiring mid-transfer fails the
+    // upload at 90% with nothing to show for it.
+    const uploadUrl = await getSignedUrl(this.s3Client, command, {
+      expiresIn: 6 * 60 * 60,
+    });
+
+    return {
+      uploadUrl,
+      key: fileKey,
+      fileUrl: buildPublicUrl(bucketName, region, fileKey),
+    };
+  }
+
+  /**
+   * Fallback path, used when a presigned PUT can't be used (bucket CORS not
+   * reachable from this origin, or the presign call itself failed). Streams
+   * from the temp file multer wrote instead of buffering the whole upload in
+   * memory, and goes through the multipart uploader so size stays unbounded
+   * here too.
+   */
   async uploadChatFile(file: Express.Multer.File) {
     const bucketName = this.configService.get('AWS_BUCKET_NAME');
     const region = this.configService.get('AWS_REGION');
-    const folderPrefix = 'chat-uploads/';
-    const fileKey = `${folderPrefix}${Date.now()}-${file.originalname}`;
-
-    const uploadParams = {
-      Bucket: bucketName,
-      Key: fileKey,
-      Body: file.buffer,
-      ContentType: file.mimetype,
-    };
+    const fileKey = buildChatFileKey(file.originalname);
 
     try {
-      await this.s3Client.send(new PutObjectCommand(uploadParams));
+      // `file.path` is set by diskStorage (see the controller); `file.buffer`
+      // only exists if something still routes through memoryStorage.
+      const body = file.path ? createReadStream(file.path) : file.buffer;
 
-      const publicUrl = `https://${bucketName}.s3.${region}.amazonaws.com/${fileKey}`;
+      await new Upload({
+        client: this.s3Client,
+        queueSize: 4,
+        partSize: 10 * 1024 * 1024,
+        params: {
+          Bucket: bucketName,
+          Key: fileKey,
+          Body: body,
+          ContentType: file.mimetype || 'application/octet-stream',
+        },
+      }).done();
 
       return {
         success: true,
-        url: publicUrl,
+        url: buildPublicUrl(bucketName, region, fileKey),
       };
     } catch (error) {
       throw new Error('Error uploading file to S3');

@@ -12,7 +12,20 @@ import {
 } from '@nestjs/common';
 import { ConversationsService } from './conversations.service';
 import { AuthGuard } from '../auth/guards/auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
+/**
+ * Every route here takes the acting user from the JWT (@CurrentUser), never
+ * from a query param or request body.
+ *
+ * It used to be the other way round: AuthGuard proved *that* you were logged
+ * in, then each handler read `userId` straight off the request to decide *who*
+ * you were. Since user ids are visible all over the UI, any logged-in user
+ * could read another person's conversations, mark them read, unpin them or
+ * delete them by sending that person's id. Client-supplied ids are still
+ * accepted where they name the *target* of an action (which member to remove,
+ * who to open a DM with) — those are authorised against the caller downstream.
+ */
 @UseGuards(AuthGuard)
 @Controller('conversations')
 export class ConversationsController {
@@ -20,11 +33,10 @@ export class ConversationsController {
 
   @Get()
   findUserConversations(
-    @Query('userId') userId: string,
+    @CurrentUser('id') userId: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
-    if (!userId) throw new BadRequestException('userId is required');
     return this.conversationsService.findUserConversations(userId, {
       limit: limit ? parseInt(limit, 10) : undefined,
       offset: offset ? parseInt(offset, 10) : undefined,
@@ -34,9 +46,9 @@ export class ConversationsController {
   @Get(':id/messages')
   getMessages(
     @Param('id') id: string,
+    @CurrentUser('id') userId: string,
     @Query('before') before?: string,
     @Query('limit') limit?: string,
-    @Query('userId') userId?: string,
   ) {
     return this.conversationsService.getMessages(id, {
       before,
@@ -46,33 +58,39 @@ export class ConversationsController {
   }
 
   @Get(':id/admin-messages')
-  getMessagesAsAdmin(@Param('id') id: string, @Query('requesterId') requesterId: string) {
-    if (!requesterId) throw new BadRequestException('requesterId is required');
+  getMessagesAsAdmin(@Param('id') id: string, @CurrentUser('id') requesterId: string) {
     return this.conversationsService.getMessagesAsAdmin(id, requesterId);
   }
 
   @Get(':id/members')
-  getMembers(@Param('id') id: string, @Query('userId') userId: string) {
+  getMembers(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.conversationsService.getMembers(id, userId);
   }
 
   @Get(':id/archived-messages')
-  getArchivedMessages(@Param('id') id: string, @Query('page') page?: string) {
-    return this.conversationsService.getArchivedMessages(id, page ? parseInt(page, 10) : 1);
+  getArchivedMessages(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Query('page') page?: string,
+  ) {
+    return this.conversationsService.getArchivedMessages(
+      id,
+      page ? parseInt(page, 10) : 1,
+      userId,
+    );
   }
 
   @Post(':id/read')
-  markRead(@Param('id') id: string, @Body('userId') userId: string) {
-    if (!userId) throw new BadRequestException('userId is required');
+  markRead(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.conversationsService.markRead(id, userId);
   }
 
   @Post('dm')
-  findOrCreateDm(@Body() body: { userId: string; otherUserId: string }) {
-    if (!body?.userId || !body?.otherUserId) {
-      throw new BadRequestException('userId and otherUserId are required');
+  findOrCreateDm(@CurrentUser('id') userId: string, @Body() body: { otherUserId: string }) {
+    if (!body?.otherUserId) {
+      throw new BadRequestException('otherUserId is required');
     }
-    return this.conversationsService.findOrCreateDm(body.userId, body.otherUserId);
+    return this.conversationsService.findOrCreateDm(userId, body.otherUserId);
   }
 
   // Read-only lookup so the client can open an existing DM's real history
@@ -81,9 +99,12 @@ export class ConversationsController {
   // Nest/Express sends a bare `null` return as a zero-byte body, which
   // `res.json()` on the client throws on rather than parsing as null.
   @Get('dm/existing')
-  async findExistingDm(@Query('userId') userId: string, @Query('otherUserId') otherUserId: string) {
-    if (!userId || !otherUserId) {
-      throw new BadRequestException('userId and otherUserId are required');
+  async findExistingDm(
+    @CurrentUser('id') userId: string,
+    @Query('otherUserId') otherUserId: string,
+  ) {
+    if (!otherUserId) {
+      throw new BadRequestException('otherUserId is required');
     }
     const conversation = await this.conversationsService.findExistingDm(userId, otherUserId);
     return { conversation };
@@ -94,33 +115,38 @@ export class ConversationsController {
   // ConversationsRepository.ensureDm. Called once when entering a private
   // call/chat, before the chat is actually used.
   @Post('dm/ensure')
-  async ensureDm(@Body() body: { conversationId: string; userId: string; otherUserId: string }) {
-    if (!body?.conversationId || !body?.userId || !body?.otherUserId) {
-      throw new BadRequestException('conversationId, userId and otherUserId are required');
+  async ensureDm(
+    @CurrentUser('id') userId: string,
+    @Body() body: { conversationId: string; otherUserId: string },
+  ) {
+    if (!body?.conversationId || !body?.otherUserId) {
+      throw new BadRequestException('conversationId and otherUserId are required');
     }
-    return this.conversationsService.ensureDm(body.conversationId, body.userId, body.otherUserId);
+    return this.conversationsService.ensureDm(body.conversationId, userId, body.otherUserId);
   }
 
   @Post('group')
   createGroup(
-    @Body() body: { createdBy: string; name: string; avatarUrl?: string; memberIds: string[] },
+    @CurrentUser('id') createdBy: string,
+    @Body() body: { name: string; avatarUrl?: string; memberIds: string[] },
   ) {
-    if (!body?.createdBy || !body?.name || !body?.memberIds?.length) {
-      throw new BadRequestException('createdBy, name and memberIds are required');
+    if (!body?.name || !body?.memberIds?.length) {
+      throw new BadRequestException('name and memberIds are required');
     }
-    return this.conversationsService.createGroup(body);
+    return this.conversationsService.createGroup({ ...body, createdBy });
   }
 
   @Post(':id/members')
   addMember(
     @Param('id') id: string,
-    @Body() body: { userId: string; addedBy: string; shareHistory?: boolean },
+    @CurrentUser('id') addedBy: string,
+    @Body() body: { userId: string; shareHistory?: boolean },
   ) {
-    if (!body?.userId || !body?.addedBy) {
-      throw new BadRequestException('userId and addedBy are required');
+    if (!body?.userId) {
+      throw new BadRequestException('userId is required');
     }
     return this.conversationsService.addMember(id, body.userId, {
-      addedBy: body.addedBy,
+      addedBy,
       shareHistory: !!body.shareHistory,
     });
   }
@@ -129,43 +155,47 @@ export class ConversationsController {
   removeMember(
     @Param('id') id: string,
     @Param('userId') userId: string,
-    @Query('requesterId') requesterId: string,
+    @CurrentUser('id') requesterId: string,
   ) {
-    if (!requesterId) throw new BadRequestException('requesterId is required');
     return this.conversationsService.removeMember(id, userId, requesterId);
   }
 
   @Patch(':id')
   renameGroup(
     @Param('id') id: string,
-    @Body() body: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean; userId?: string },
+    @CurrentUser('id') userId: string,
+    @Body() body: { name?: string; avatarUrl?: string; linkedToSchedule?: boolean },
   ) {
-    return this.conversationsService.renameGroup(id, body, body?.userId);
+    return this.conversationsService.renameGroup(id, body, userId);
   }
 
   @Post(':id/pin')
-  setPinned(@Param('id') id: string, @Body() body: { userId: string; pinned: boolean }) {
-    if (!body?.userId) throw new BadRequestException('userId is required');
-    return this.conversationsService.setPinned(id, body.userId, !!body.pinned);
+  setPinned(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: { pinned: boolean },
+  ) {
+    return this.conversationsService.setPinned(id, userId, !!body?.pinned);
   }
 
   @Post(':id/mute')
-  setMuted(@Param('id') id: string, @Body() body: { userId: string; muted: boolean }) {
-    if (!body?.userId) throw new BadRequestException('userId is required');
-    return this.conversationsService.setMuted(id, body.userId, !!body.muted);
+  setMuted(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: { muted: boolean },
+  ) {
+    return this.conversationsService.setMuted(id, userId, !!body?.muted);
   }
 
   @Delete(':id')
-  deleteForMe(@Param('id') id: string, @Query('userId') userId: string) {
-    if (!userId) throw new BadRequestException('userId is required');
+  deleteForMe(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.conversationsService.deleteForMe(id, userId);
   }
 
   // Hard-deletes the group for every member — distinct from deleteForMe
   // above, which only hides a conversation from the requester's own list.
   @Delete(':id/group')
-  async deleteGroup(@Param('id') id: string, @Query('userId') userId: string) {
-    if (!userId) throw new BadRequestException('userId is required');
+  async deleteGroup(@Param('id') id: string, @CurrentUser('id') userId: string) {
     const memberIds = await this.conversationsService.deleteGroup(id, userId);
     return { deleted: true, memberIds };
   }

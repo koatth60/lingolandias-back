@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConversationsRepository } from './conversations.repository';
 import { ConversationMember } from './entities/conversation-member.entity';
 
@@ -19,9 +19,10 @@ describe('ConversationsRepository', () => {
       save: jest.fn(),
       update: jest.fn(),
       createQueryBuilder: jest.fn(),
+      findOneBy: jest.fn(),
     };
     messageRepo = { save: jest.fn(), update: jest.fn(), delete: jest.fn(), findOneBy: jest.fn() };
-    archivedRepo = {};
+    archivedRepo = { createQueryBuilder: jest.fn() };
     userRepo = {};
     scheduleRepo = {};
     dataSource = { query: jest.fn(), transaction: jest.fn() };
@@ -161,6 +162,75 @@ describe('ConversationsRepository', () => {
       await repo.autoJoinLegacyRooms({ id: 'u1', role: 'user', language: undefined });
 
       expect(memberRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+  });
+  // Both of these guard holes that were live in production: edit/delete by
+  // message id with no ownership check at all, and archived history readable
+  // by any authenticated caller for any conversation.
+  describe('canModifyMessage', () => {
+    it('allows the author to modify their own message', async () => {
+      messageRepo.findOneBy.mockResolvedValue({
+        id: 'm1', conversationId: 'c1', senderId: 'u1',
+      });
+
+      await expect(repo.canModifyMessage('m1', 'c1', 'u1')).resolves.toBe(true);
+    });
+
+    it('refuses someone who is not the author', async () => {
+      messageRepo.findOneBy.mockResolvedValue({
+        id: 'm1', conversationId: 'c1', senderId: 'u1',
+      });
+
+      await expect(repo.canModifyMessage('m1', 'c1', 'u2')).resolves.toBe(false);
+    });
+
+    it('refuses when the message belongs to a different conversation', async () => {
+      messageRepo.findOneBy.mockResolvedValue({
+        id: 'm1', conversationId: 'c1', senderId: 'u1',
+      });
+
+      await expect(repo.canModifyMessage('m1', 'c2', 'u1')).resolves.toBe(false);
+    });
+
+    it('refuses a message that does not exist', async () => {
+      messageRepo.findOneBy.mockResolvedValue(null);
+
+      await expect(repo.canModifyMessage('m1', 'c1', 'u1')).resolves.toBe(false);
+    });
+
+    it('refuses when any identifier is missing', async () => {
+      await expect(repo.canModifyMessage('', 'c1', 'u1')).resolves.toBe(false);
+      await expect(repo.canModifyMessage('m1', '', 'u1')).resolves.toBe(false);
+      await expect(repo.canModifyMessage('m1', 'c1', '')).resolves.toBe(false);
+      expect(messageRepo.findOneBy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getArchivedMessages', () => {
+    it('refuses a caller who is not a member', async () => {
+      memberRepo.findOneBy.mockResolvedValue(null);
+
+      await expect(repo.getArchivedMessages('c1', 1, 'u2')).rejects.toThrow(ForbiddenException);
+      expect(archivedRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('refuses when no user is supplied at all', async () => {
+      await expect(repo.getArchivedMessages('c1', 1, undefined)).rejects.toThrow(ForbiddenException);
+      expect(archivedRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('returns history for a real member', async () => {
+      memberRepo.findOneBy.mockResolvedValue({ conversationId: 'c1', userId: 'u1' });
+      const rows = [{ id: 'a1' }];
+      archivedRepo.createQueryBuilder.mockReturnValue({
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue(rows),
+      });
+
+      await expect(repo.getArchivedMessages('c1', 1, 'u1')).resolves.toEqual(rows);
     });
   });
 });

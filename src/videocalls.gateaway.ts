@@ -27,6 +27,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConversationsRepository } from './conversations/conversations.repository';
 import { PushService } from './push/push.service';
 import { ScheduleBroadcaster } from './gateway/schedule-broadcaster.service';
+import { isAllowedOrigin } from './common/cors-origins';
 
 const MAX_MESSAGE_LENGTH = 4000;
 const RATE_LIMIT_WINDOW_MS = 10_000; // 10 seconds
@@ -40,7 +41,10 @@ const CALL_START_DEDUP_WINDOW_MS = 10_000;
 @Injectable({ scope: Scope.DEFAULT })
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    // Same allowlist the REST API uses — see common/cors-origins.
+    origin: (origin: string, cb: (err: Error | null, allow?: boolean) => void) =>
+      cb(null, isAllowedOrigin(origin)),
+    credentials: true,
   },
 })
 export class VideoCallsGateway
@@ -223,13 +227,27 @@ export class VideoCallsGateway
 
   @SubscribeMessage('registerUser')
   async handleRegisterUser(socket: Socket, data: { userId: string }) {
-    const { userId } = data;
-    if (!userId) return;
-
     // Re-verify token here in case handshake token wasn't provided (legacy clients)
     if (!this.isAuthenticated(socket)) {
       this.verifySocketToken(socket);
     }
+
+    // The claimed userId is only honoured when it matches the one the JWT
+    // proves. It used to be trusted outright, which made this the way into
+    // everything else: socketToUser is what canJoinRoom resolves identity
+    // from, so registering as someone else was enough to join their
+    // conversations and read them live.
+    const authenticatedUserId = socket.data?.userId;
+    if (!authenticatedUserId) {
+      socket.emit('chatError', { reason: 'not_authenticated' });
+      return;
+    }
+    if (data?.userId && data.userId !== authenticatedUserId) {
+      this.logger.warn(
+        `[auth] socket=${socket.id} tried to register as ${data.userId} but token says ${authenticatedUserId}`,
+      );
+    }
+    const userId = authenticatedUserId;
 
     let suppressOnline = false;
     if (this.offlineTimers.has(userId)) {
@@ -326,11 +344,40 @@ export class VideoCallsGateway
         this.roomMembers.get(data.room).add(userId);
       }
 
-      const rooms = Array.from(socket.rooms);
-      rooms.forEach((room) => { if (room !== socket.id) socket.leave(room); });
-
+      // Deliberately does NOT leave the socket's other rooms.
+      //
+      // It used to: every join dropped every previously-joined room first.
+      // The whole frontend shares ONE socket instance (see src/socket.js), so
+      // opening the support widget, or the chat panel inside a video call,
+      // silently evicted the socket from the conversation the user already
+      // had open — live messages for it simply stopped arriving until
+      // something forced a refetch. Socket.IO rooms are a fan-out mechanism,
+      // not exclusive state; every client handler already filters on
+      // conversationId, and 'leave' below handles the explicit exit.
       socket.join(data.room);
       socket.broadcast.to(data.room).emit('ready', { username: data.username });
+    } catch (_) {}
+  }
+
+  // The client has emitted this on unmount for a long time; nothing was
+  // listening, which is part of why 'join' resorted to leaving everything.
+  @SubscribeMessage('leave')
+  handleLeaveRoom(socket: Socket, data: { room: string }) {
+    try {
+      if (!this.isValidRoom(data?.room)) return;
+      socket.leave(data.room);
+      const userId = this.resolveSocketUserId(socket);
+      if (!userId) return;
+      // Only drop the user from the room's presence set once none of their
+      // sockets are in it — a second tab, or the in-call chat, may still be.
+      const stillPresent = Array.from(this.userSockets.get(userId) || []).some(
+        (sid) => sid !== socket.id && this.server.sockets.adapter.rooms.get(data.room)?.has(sid),
+      );
+      if (stillPresent) return;
+      const members = this.roomMembers.get(data.room);
+      if (!members) return;
+      members.delete(userId);
+      if (members.size === 0) this.roomMembers.delete(data.room);
     } catch (_) {}
   }
 
@@ -778,7 +825,18 @@ export class VideoCallsGateway
         socket.emit('chatError', { reason: 'rate_limited' });
         return;
       }
-      const isMember = await this.conversationsRepository.isMember(data.conversationId, data.senderId);
+
+      // The sender is whoever the socket's token says it is — never
+      // data.senderId. The membership check below used to run against the
+      // client-supplied id, so it confirmed "the person you claim to be is a
+      // member" rather than "you are a member", which let any logged-in user
+      // post into any conversation under any member's name.
+      const senderId = this.resolveSocketUserId(socket);
+      if (!senderId) {
+        socket.emit('chatError', { reason: 'not_authenticated' });
+        return;
+      }
+      const isMember = await this.conversationsRepository.isMember(data.conversationId, senderId);
       if (!isMember) {
         socket.emit('chatError', { reason: 'not_a_member' });
         return;
@@ -795,11 +853,11 @@ export class VideoCallsGateway
       // someone not in this conversation isn't a real mention (yet — auto-
       // adding a mentioned non-member is a separate, not-yet-built feature).
       const mentionedUserIds = this.extractMentionedUserIds(safe).filter(
-        (id) => id !== data.senderId && memberIds.includes(id),
+        (id) => id !== senderId && memberIds.includes(id),
       );
       const saved = await this.conversationsRepository.saveMessage({
         conversationId: data.conversationId,
-        senderId: data.senderId,
+        senderId,
         username: data.username?.slice(0, 100) || 'User',
         email: data.email?.slice(0, 200) || '',
         avatarUrl: data.avatarUrl,
@@ -821,7 +879,7 @@ export class VideoCallsGateway
       // the "mentioned" toast and the push notification body, neither of
       // which should show raw markup.
       const preview = data.fileUrl ? '📎 File' : safe.replace(/@\[([^\]]+)\]\([0-9a-f-]{36}\)/g, '@$1').slice(0, 80);
-      const recipientIds = memberIds.filter((id) => id !== data.senderId);
+      const recipientIds = memberIds.filter((id) => id !== senderId);
       this.emitToUsers(recipientIds, 'newConversationMessage', {
         conversationId: data.conversationId,
         preview,
@@ -870,17 +928,21 @@ export class VideoCallsGateway
     try {
       if (!this.isAuthenticated(socket)) return;
       if (!this.isValidRoom(data.conversationId)) return;
-      const isMember = await this.conversationsRepository.isMember(data.conversationId, data.userId);
+      // Actor from the socket, not data.userId — otherwise anyone could clear
+      // someone else's unread badge (and fake a "seen" receipt to the sender).
+      const userId = this.resolveSocketUserId(socket);
+      if (!userId) return;
+      const isMember = await this.conversationsRepository.isMember(data.conversationId, userId);
       if (!isMember) return;
       const readAt = new Date();
-      await this.conversationsRepository.markRead(data.conversationId, data.userId);
+      await this.conversationsRepository.markRead(data.conversationId, userId);
       // Broadcast so the sender's open chat window can flip their message to
       // "read" live, the way Teams/WhatsApp do — everyone in the room gets
       // this, including the reader themselves, which is harmless (their own
       // read state doesn't render anything).
       this.server.to(data.conversationId).emit('conversationRead', {
         conversationId: data.conversationId,
-        userId: data.userId,
+        userId,
         readAt,
       });
       // Also reach the reader's OTHER sessions directly (sidebar badge, chat
@@ -889,9 +951,9 @@ export class VideoCallsGateway
       // Without this, an unread badge that was bumped by the arriving message
       // (see handleSendConversationMessage) never learns it was read until
       // some unrelated future event forces a full refetch.
-      this.emitToUsers([data.userId], 'conversationRead', {
+      this.emitToUsers([userId], 'conversationRead', {
         conversationId: data.conversationId,
-        userId: data.userId,
+        userId,
         readAt,
       });
     } catch (_) {}
@@ -907,6 +969,19 @@ export class VideoCallsGateway
       if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.conversationId)) return;
       const safe = this.sanitizeMessage(data.newMessage);
       if (!safe.trim()) return;
+      // Previously this edited by message id alone, with no check of any
+      // kind: knowing a UUID was enough to rewrite anyone's message in any
+      // conversation. canModifyMessage enforces both ownership and that the
+      // message really belongs to the conversation named here.
+      const editorId = this.resolveSocketUserId(socket);
+      if (!editorId) return;
+      const canEdit = await this.conversationsRepository.canModifyMessage(
+        data.messageId, data.conversationId, editorId,
+      );
+      if (!canEdit) {
+        socket.emit('chatError', { reason: 'not_allowed', messageId: data.messageId });
+        return;
+      }
       const editedAt = new Date();
       await this.conversationsRepository.editMessage(data.messageId, safe, editedAt);
       this.server.to(data.conversationId).emit('conversationMessageEdited', {
@@ -925,6 +1000,18 @@ export class VideoCallsGateway
     try {
       if (!this.isAuthenticated(socket)) return;
       if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.conversationId)) return;
+      // Same hole as editConversationMessage: deletion used to need only a
+      // message UUID. The UI has always offered "delete" on your own messages
+      // only, so enforcing ownership here changes no legitimate behaviour.
+      const deleterId = this.resolveSocketUserId(socket);
+      if (!deleterId) return;
+      const canDelete = await this.conversationsRepository.canModifyMessage(
+        data.messageId, data.conversationId, deleterId,
+      );
+      if (!canDelete) {
+        socket.emit('chatError', { reason: 'not_allowed', messageId: data.messageId });
+        return;
+      }
       await this.conversationsRepository.deleteMessage(data.messageId);
       this.server.to(data.conversationId).emit('conversationMessageDeleted', {
         messageId: data.messageId,
