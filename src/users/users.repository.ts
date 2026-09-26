@@ -44,6 +44,15 @@ export class UsersRepository {
 
   // Lightweight bulk lookup (no relations) for cases that only need id/role,
   // e.g. filtering a candidate list down to actual students server-side.
+  /** Just the role, for authorization checks — no relations loaded. */
+  async findRole(id: string): Promise<string | null> {
+    const user = await this.usersRepository.findOne({
+      where: { id },
+      select: { id: true, role: true },
+    });
+    return user?.role ?? null;
+  }
+
   async findByIds(ids: string[]): Promise<User[]> {
     if (!ids.length) return [];
     return this.usersRepository.findBy({ id: In(ids) });
@@ -303,10 +312,8 @@ export class UsersRepository {
     });
   }
 
-  async update(updateUser: any): Promise<any> {
-    const { email, ...rest } = updateUser;
-
-    const updatedUser = await this.usersRepository.update({ email }, rest);
+  async update(userId: string, fields: Partial<User>): Promise<any> {
+    const updatedUser = await this.usersRepository.update({ id: userId }, fields);
 
     if (!updatedUser.affected) {
       return 'no user found';

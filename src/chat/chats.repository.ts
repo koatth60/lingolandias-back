@@ -84,6 +84,10 @@ export class ChatsRepository {
     }
   }
 
+  async findGlobalChatById(id: string): Promise<GlobalChat | null> {
+    return this.globalChatRepository.findOneBy({ id });
+  }
+
   // Delete a global chat message
   async deleteGlobalChat(id: string): Promise<void> {
     try {

@@ -145,7 +145,7 @@ export class ConversationsController {
     if (!body?.userId) {
       throw new BadRequestException('userId is required');
     }
-    return this.conversationsService.addMember(id, body.userId, {
+    return this.conversationsService.addMemberAsMember(id, body.userId, {
       addedBy,
       shareHistory: !!body.shareHistory,
     });

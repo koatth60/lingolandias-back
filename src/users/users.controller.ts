@@ -14,6 +14,8 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { AuthGuard } from '../auth/guards/auth.guard';
+import { Roles, RolesGuard } from '../auth/guards/roles.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 // import { UpdateUserDto } from './dto/update-user.dto';
 
 @UseGuards(AuthGuard)
@@ -129,14 +131,18 @@ export class UsersController {
   //   return this.usersService.findOne(+id);
   // }
 
+  // Edits the caller's own profile only (see UsersService.update).
   @Post('updateuser')
   @HttpCode(HttpStatus.OK)
-  async update(@Body() updateUser: any) {
-    const updatedUser = await this.usersService.update(updateUser);
+  async update(@CurrentUser('id') userId: string, @Body() updateUser: any) {
+    const updatedUser = await this.usersService.update(userId, updateUser);
     return updatedUser;
   }
 
+  // Deletes an account and its schedules and boards — admin panel only.
   @Delete()
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   @HttpCode(HttpStatus.OK)
   remove(@Body() body: any) {
     const { email } = body;

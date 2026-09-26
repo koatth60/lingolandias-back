@@ -171,6 +171,32 @@ export class ConversationsRepository {
       .filter(Boolean);
   }
 
+  /**
+   * True when `studentId` (the legacy 1:1 room id) is one of the two users and
+   * the other one is that student's teacher — assigned via users.teacherId,
+   * or with at least one class scheduled between them.
+   */
+  async isTeacherStudentPair(studentId: string, userA: string, userB: string): Promise<boolean> {
+    if (!studentId || !userA || !userB || userA === userB) return false;
+    if (studentId !== userA && studentId !== userB) return false;
+    const teacherId = studentId === userA ? userB : userA;
+    const student = await this.userRepo.findOne({
+      where: { id: studentId },
+      relations: ['teacher'],
+      select: { id: true, teacher: { id: true } },
+    });
+    if (!student) return false;
+    if (student.teacher?.id === teacherId) return true;
+    return (await this.scheduleRepo.count({ where: { studentId, teacherId } })) > 0;
+  }
+
+  /** Members, plus admins (who manage classes from the admin calendar). */
+  async isMemberOrAdmin(conversationId: string, userId: string): Promise<boolean> {
+    if (await this.isMember(conversationId, userId)) return true;
+    const user = await this.userRepo.findOne({ where: { id: userId }, select: { id: true, role: true } });
+    return user?.role === 'admin';
+  }
+
   async isMember(conversationId: string, userId: string): Promise<boolean> {
     const row = await this.memberRepo.findOne({ where: { conversationId, userId } });
     return !!row;
@@ -417,6 +443,15 @@ export class ConversationsRepository {
       // estudiante), pero por seguridad no tocamos nada ajeno.
       return conversation;
     }
+    // Antes no se comprobaba nada: cualquier usuario logueado podía mandar el
+    // id de otro alumno como conversationId, quedar añadido como miembro de
+    // ese DM y leer todo su historial. Ahora quien no es ya miembro solo
+    // puede reparar el DM legítimo: la sala es el id del alumno y la otra
+    // persona es su profesor (asignado, o con alguna clase entre los dos).
+    const alreadyMember = conversation ? await this.isMember(conversationId, userId) : false;
+    if (!alreadyMember && !(await this.isTeacherStudentPair(conversationId, userId, otherUserId))) {
+      throw new ForbiddenException('Not a participant of this conversation');
+    }
     if (!conversation) {
       conversation = this.conversationRepo.create({ id: conversationId, type: 'dm' as ConversationType });
       await this.conversationRepo.save(conversation);
@@ -641,6 +676,12 @@ export class ConversationsRepository {
   ) {
     const conversation = await this.conversationRepo.findOneBy({ id: conversationId });
     if (!conversation) throw new NotFoundException('Conversation not found');
+    // A user-facing edit (requesterId set) must come from a member — before
+    // this, anyone logged in could rename or re-link any group they could
+    // name. Internal calls from UsersService pass no requesterId.
+    if (requesterId && !(await this.isMemberOrAdmin(conversationId, requesterId))) {
+      throw new ForbiddenException('Not a member of this conversation');
+    }
     // A plain 1:1 DM stays a DM even once a class is scheduled from it —
     // each side already sees the other person's name, no group name needed.
     // scheduleGroup's internal call (no requesterId) always sends a `name`

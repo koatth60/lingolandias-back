@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ChatsRepository } from './chats.repository';
 import { GlobalChat } from './entities/global-chat.entity';
 import { UnreadGlobalMessage } from './entities/unread-global-messages.entity';
@@ -13,7 +13,20 @@ export class ChatService {
     return this.chatsRepositoy.getGlobalChats(room);
   }
 
-  async deleteGlobalChat(id: string): Promise<void> {
+  // Authors may delete their own message; admins may delete any. Same rule
+  // as the gateway's deleteSupportChat handler.
+  async deleteGlobalChatAs(
+    id: string,
+    actor: { id: string; email: string; role: string },
+  ): Promise<void> {
+    const message = await this.chatsRepositoy.findGlobalChatById(id);
+    if (!message) throw new NotFoundException('Message not found');
+    const isAuthor = message.senderId
+      ? message.senderId === actor.id
+      : !!message.email && message.email === actor.email;
+    if (actor.role !== 'admin' && !isAuthor) {
+      throw new ForbiddenException('You can only delete your own messages');
+    }
     return this.chatsRepositoy.deleteGlobalChat(id);
   }
 

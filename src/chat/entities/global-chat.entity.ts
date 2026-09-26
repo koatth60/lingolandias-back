@@ -20,6 +20,12 @@ export class GlobalChat {
   @Column({ type: 'varchar', length: 100 })
   email: string;
 
+  // Who actually sent it, from the socket's token. Nullable because rows
+  // written before this column existed only have the (client-supplied)
+  // email to go on. Used to decide who may edit or delete a message.
+  @Column({ type: 'uuid', nullable: true })
+  senderId?: string | null;
+
   @Column({ type: 'varchar', length: 255, nullable: true })
   avatarUrl?: string;
 

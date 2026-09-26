@@ -10,6 +10,7 @@ import {
   UseGuards,
   HttpException,
   HttpStatus,
+  ForbiddenException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -17,6 +18,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/guards/auth.guard';
+import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import {
   isBlockedChatFile,
@@ -27,6 +29,7 @@ import { S3Service } from './upload-files.service';
 import { UsersRepository } from 'src/users/users.repository';
 import { MeetingLogsService } from 'src/meeting-logs/meeting-logs.service';
 import { RecordingsRepository } from './recordings.repository';
+import { JibriSecretGuard } from './jibri-secret.guard';
 
 @Controller('upload')
 export class UploadController {
@@ -217,7 +220,20 @@ export class UploadController {
   }
 
   // ── Recordings (S3) ────────────────────────────────────────────────────
+  //
+  // Every route below used to have no guard at all: anyone on the internet
+  // could list every class video, upload files of any size to the server's
+  // disk, and delete ANY object in the bucket (the key was not even limited
+  // to recordings/).
 
+  /** Admins may act on any recording; anyone else only on their own. */
+  private async assertSelfOrAdmin(callerId: string, targetId: string) {
+    if (callerId === targetId) return;
+    const role = await this.usersRepository.findRole(callerId);
+    if (role !== 'admin') throw new ForbiddenException();
+  }
+
+  @UseGuards(AuthGuard)
   @Post('recording')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -264,6 +280,7 @@ export class UploadController {
   // a conference recording is done. `roomId` is the Jitsi room name — for 1:1 classes
   // that's the student's user id, so we can look up their teacher for the S3 folder;
   // for anything else (group/language rooms, unknown ids) it falls back to "others".
+  @UseGuards(JibriSecretGuard)
   @Post('recording-jibri')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -355,8 +372,13 @@ export class UploadController {
 
   // ── "My recordings" — teacher/student self-service views ────────────────
 
+  @UseGuards(AuthGuard)
   @Get('recordings/teacher/:teacherId')
-  async listTeacherRecordings(@Param('teacherId') teacherId: string) {
+  async listTeacherRecordings(
+    @Param('teacherId') teacherId: string,
+    @CurrentUser('id') callerId: string,
+  ) {
+    await this.assertSelfOrAdmin(callerId, teacherId);
     const recordings = await this.recordingsRepository.findByTeacher(teacherId);
     const grouped: Record<string, { displayName: string; recordings: any[] }> = {};
     for (const r of recordings) {
@@ -375,8 +397,13 @@ export class UploadController {
     return grouped;
   }
 
+  @UseGuards(AuthGuard)
   @Get('recordings/student/:studentId')
-  async listStudentRecordings(@Param('studentId') studentId: string) {
+  async listStudentRecordings(
+    @Param('studentId') studentId: string,
+    @CurrentUser('id') callerId: string,
+  ) {
+    await this.assertSelfOrAdmin(callerId, studentId);
     const recordings = await this.recordingsRepository.findByStudent(studentId);
     return recordings.map((r) => ({
       key: r.s3Key,
@@ -388,6 +415,9 @@ export class UploadController {
     }));
   }
 
+  // The whole bucket listing — admin dashboard only.
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('admin')
   @Get('recordings')
   async listRecordings() {
     try {
@@ -401,10 +431,26 @@ export class UploadController {
     }
   }
 
+  // Admins may delete any recording; a teacher only one filed under their
+  // own id (the "My recordings" page).
+  @UseGuards(AuthGuard)
   @Delete('recording')
-  async deleteRecording(@Body('key') key: string) {
+  async deleteRecording(
+    @Body('key') key: string,
+    @CurrentUser('id') callerId: string,
+  ) {
     if (!key) {
       throw new HttpException('No key provided', HttpStatus.BAD_REQUEST);
+    }
+    if (!key.startsWith('recordings/') || key.includes('..')) {
+      throw new HttpException('Invalid key', HttpStatus.BAD_REQUEST);
+    }
+    const role = await this.usersRepository.findRole(callerId);
+    if (role !== 'admin') {
+      const recording = await this.recordingsRepository.findByS3Key(key);
+      if (!recording || recording.teacherId !== callerId) {
+        throw new ForbiddenException();
+      }
     }
     try {
       const result = await this.s3Service.deleteRecording(key);

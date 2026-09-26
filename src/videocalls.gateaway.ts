@@ -29,6 +29,7 @@ const RATE_LIMIT_MAX = 20;           // max messages per window
 // joiners each thinking they're first, without risking swallowing a
 // genuinely new call placed to the same room minutes later.
 const CALL_START_DEDUP_WINDOW_MS = 10_000;
+const SUPPORT_ROOM = 'uuid-support';
 
 @Injectable({ scope: Scope.DEFAULT })
 @WebSocketGateway({
@@ -107,6 +108,8 @@ export class VideoCallsGateway
     }
     try {
       const payload = this.jwtService.verify(token, { secret: process.env.JWT_SECRET });
+      // Password-reset tokens share the secret; they are not session tokens.
+      if (payload.h !== undefined) throw new Error('reset token used as session token');
       socket.data.userId = payload.sub || payload.id;
       socket.data.authenticated = true;
       return true;
@@ -323,6 +326,12 @@ export class VideoCallsGateway
         socket.emit('chatError', { reason: 'not_a_member' });
         return;
       }
+      // The support channel is for teachers and admins only (the frontend
+      // only shows it to them). Joining is what delivers its live messages.
+      if (data.room === SUPPORT_ROOM && !(await this.getSupportActor(socket))) {
+        socket.emit('chatError', { reason: 'not_a_member' });
+        return;
+      }
       if (userId) {
         if (!this.roomMembers.has(data.room)) {
           this.roomMembers.set(data.room, new Set());
@@ -423,20 +432,57 @@ export class VideoCallsGateway
     } catch (_) {}
   }
 
+  // ── Support channel (global-chats, room 'uuid-support') ────────────────
+  //
+  // Until 2026-09-26 these handlers only checked that the socket was logged
+  // in: any student could edit or delete any support message by id, post as
+  // "Admin" with any name, email, role and avatar, and react into any room.
+  // Identity now comes from the token and the users table, and only teachers
+  // and admins — the people the channel is shown to — can use it.
+
+  /** The sender as stored in the DB, if they may use the support channel. */
+  private async getSupportActor(socket: Socket) {
+    if (!this.isAuthenticated(socket)) return null;
+    const userId = this.resolveSocketUserId(socket);
+    if (!userId) return null;
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      select: ['id', 'name', 'lastName', 'email', 'role', 'avatarUrl'],
+    });
+    if (!user || (user.role !== 'teacher' && user.role !== 'admin')) return null;
+    return user;
+  }
+
+  /** Authors may change their own messages; admins may change any. */
+  private canModifySupportMessage(
+    actor: { id: string; email: string; role: string },
+    message: GlobalChat,
+  ): boolean {
+    if (actor.role === 'admin') return true;
+    if (message.senderId) return message.senderId === actor.id;
+    // Rows written before senderId existed: the email is all there is.
+    return !!message.email && message.email === actor.email;
+  }
+
   @SubscribeMessage('editGlobalChat')
   async handleEditGlobalChat(
     socket: Socket,
     data: { messageId: string; room: string; newMessage: string },
   ) {
     try {
-      if (!this.isAuthenticated(socket)) return;
-      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.room)) return;
+      const actor = await this.getSupportActor(socket);
+      if (!actor) return;
+      if (!this.isValidUUID(data.messageId)) return;
       const safe = this.sanitizeMessage(data.newMessage);
       if (!safe.trim()) return;
+      const existing = await this.chatsRepository.findGlobalChatById(data.messageId);
+      if (!existing || !this.canModifySupportMessage(actor, existing)) return;
       const editedAt = new Date();
       await this.chatsRepository.editGlobalChat(data.messageId, safe, editedAt);
-      this.server.to(data.room).emit('globalChatEdited', { messageId: data.messageId, newMessage: safe, editedAt });
-    } catch (_) {}
+      this.server.to(existing.room).emit('globalChatEdited', { messageId: data.messageId, newMessage: safe, editedAt });
+    } catch (err) {
+      this.logger.error(`[editGlobalChat] error: ${err?.message}`);
+    }
   }
 
   @SubscribeMessage('toggleGlobalChatReaction')
@@ -445,74 +491,89 @@ export class VideoCallsGateway
     data: { messageId: string; room: string; emoji: string; userName?: string },
   ) {
     try {
-      if (!this.isAuthenticated(socket)) return;
-      if (!this.isValidUUID(data.messageId) || !this.isValidRoom(data.room)) return;
-      const userId = this.resolveSocketUserId(socket);
-      if (!userId) return;
+      const actor = await this.getSupportActor(socket);
+      if (!actor) return;
+      if (!this.isValidUUID(data.messageId)) return;
       const emoji = (data.emoji || '').trim().slice(0, 8);
       if (!emoji) return;
-      const userName = (data.userName || '').trim().slice(0, 100) || 'Someone';
-      const reactions = await this.chatsRepository.toggleGlobalChatReaction(data.messageId, userId, userName, emoji);
-      this.server.to(data.room).emit('globalChatReactionUpdated', {
-        room: data.room,
+      const existing = await this.chatsRepository.findGlobalChatById(data.messageId);
+      if (!existing) return;
+      const reactions = await this.chatsRepository.toggleGlobalChatReaction(data.messageId, actor.id, actor.name, emoji);
+      this.server.to(existing.room).emit('globalChatReactionUpdated', {
+        room: existing.room,
         messageId: data.messageId,
         reactions,
       });
-    } catch (_) {}
+    } catch (err) {
+      this.logger.error(`[toggleGlobalChatReaction] error: ${err?.message}`);
+    }
   }
 
   @SubscribeMessage('supportChat')
   async handleSupportChat(
     socket: Socket,
     data: {
-      username: string;
-      email: string;
-      room: string;
       message: string;
-      userRole?: string;
-      userUrl?: string;
       fileUrl?: string;
       replyTo?: { id: string; message: string; username: string } | null;
     },
   ) {
     try {
-      if (!this.isAuthenticated(socket)) return;
+      const actor = await this.getSupportActor(socket);
+      if (!actor) return;
       if (this.isRateLimited(socket.id)) return;
 
       const safe = this.sanitizeMessage(data.message || '');
+      if (!safe.trim() && !data.fileUrl) return;
 
+      // Name, email, role and avatar come from the users table, not the
+      // payload — the client used to send all four and they were stored as-is.
       const globalChatData = new GlobalChat();
-      globalChatData.username = data.username?.slice(0, 100) || 'User';
-      globalChatData.email = data.email?.slice(0, 200) || '';
-      globalChatData.room = 'uuid-support';
+      globalChatData.senderId = actor.id;
+      globalChatData.username = (actor.name || 'User').slice(0, 100);
+      globalChatData.email = (actor.email || '').slice(0, 100);
+      globalChatData.room = SUPPORT_ROOM;
       globalChatData.message = safe;
       globalChatData.timestamp = new Date();
-      if (data.userRole) globalChatData.userRole = data.userRole;
-      if (data.userUrl) globalChatData.userUrl = data.userUrl;
-      if (data.fileUrl) globalChatData.fileUrl = data.fileUrl;
-      if (data.replyTo) globalChatData.replyTo = data.replyTo;
+      globalChatData.userRole = actor.role;
+      if (actor.avatarUrl) globalChatData.userUrl = actor.avatarUrl.slice(0, 255);
+      if (typeof data.fileUrl === 'string') globalChatData.fileUrl = data.fileUrl.slice(0, 500);
+      if (data.replyTo?.id && this.isValidUUID(data.replyTo.id)) {
+        globalChatData.replyTo = {
+          id: data.replyTo.id,
+          message: String(data.replyTo.message || '').slice(0, 300),
+          username: String(data.replyTo.username || '').slice(0, 100),
+        };
+      }
 
       await this.chatsRepository.saveGlobalChat(globalChatData);
 
       await this.unreadCounterService.bulkIncrementCounter(
         'supportRoom',
-        (qb) => supportRoomStrategy.applyConditions(qb, 'uuid-support'),
-        data.email,
+        (qb) => supportRoomStrategy.applyConditions(qb, SUPPORT_ROOM),
+        actor.email,
       );
 
-      this.server.to('uuid-support').emit('supportChat', globalChatData);
-      socket.broadcast.emit('newUnreadSupportMessage', { room: 'uuid-support' });
-    } catch (_) {}
+      this.server.to(SUPPORT_ROOM).emit('supportChat', globalChatData);
+      socket.broadcast.emit('newUnreadSupportMessage', { room: SUPPORT_ROOM });
+    } catch (err) {
+      this.logger.error(`[supportChat] error: ${err?.message}`);
+    }
   }
 
   @SubscribeMessage('deleteSupportChat')
   async handleDeleteSupportChat(socket: Socket, data: { messageId: string }) {
     try {
-      if (!this.isAuthenticated(socket)) return;
+      const actor = await this.getSupportActor(socket);
+      if (!actor) return;
       if (!this.isValidUUID(data.messageId)) return;
+      const existing = await this.chatsRepository.findGlobalChatById(data.messageId);
+      if (!existing || !this.canModifySupportMessage(actor, existing)) return;
       await this.chatsRepository.deleteGlobalChat(data.messageId);
-      this.server.to('uuid-support').emit('supportChatDeleted', { messageId: data.messageId });
-    } catch (_) {}
+      this.server.to(existing.room).emit('supportChatDeleted', { messageId: data.messageId });
+    } catch (err) {
+      this.logger.error(`[deleteSupportChat] error: ${err?.message}`);
+    }
   }
 
   // ── Unified conversation model (Teams-style overhaul) ───────────────────
@@ -895,44 +956,70 @@ export class VideoCallsGateway
         this.logger.warn(`[callStarted] rejected: socket not authenticated (socket=${socket.id})`);
         return;
       }
-      const now = Date.now();
-      const lastCallStart = this.recentCallStarts.get(data.conversationId);
-      if (lastCallStart && now - lastCallStart < CALL_START_DEDUP_WINDOW_MS) {
-        this.logger.warn(`[callStarted] deduped: conversationId=${data.conversationId} caller=${data.callerId} (ringed ${now - lastCallStart}ms ago)`);
-        return;
-      }
-      this.recentCallStarts.set(data.conversationId, now);
-      const payload = {
-        conversationId: data.conversationId,
-        callerId: data.callerId,
-        callerName: data.callerName?.slice(0, 100) || 'Someone',
-        chatName: data.chatName?.slice(0, 100) || '',
-        chatType: data.chatType,
-      };
-      if (data.otherUserId) {
-        const recipients = await this.excludeAdmins([data.otherUserId]);
-        if (recipients.length) {
-          this.logger.warn(`[callStarted] 1:1 notify otherUserId=${data.otherUserId} caller=${data.callerId}`);
-          this.emitToUsers(recipients, 'callStarted', payload);
-          this.pushCallNotification(recipients, payload);
-        }
-        return;
-      }
+      // The caller is whoever holds this socket's token. The payload's
+      // callerId/callerName used to be trusted, so anyone could ring anyone
+      // as "their teacher" and send them into a room of the attacker's
+      // choosing, and the group check below ran against a spoofable id.
+      const callerId = this.resolveSocketUserId(socket);
+      if (!callerId) return;
       if (!this.isValidRoom(data.conversationId)) {
         this.logger.warn(`[callStarted] rejected: invalid room conversationId=${data.conversationId}`);
         return;
       }
-      const isMember = await this.conversationsRepository.isMember(data.conversationId, data.callerId);
-      if (!isMember) {
-        this.logger.warn(`[callStarted] rejected: caller=${data.callerId} not a member of conversationId=${data.conversationId}`);
+
+      let recipientIds: string[];
+      if (data.otherUserId) {
+        // 1:1: both must be in the conversation, or be the teacher/student
+        // pair of a legacy class room (room id = the student's id), which
+        // may not have its conversation row yet.
+        const allowed =
+          ((await this.conversationsRepository.isMember(data.conversationId, callerId)) &&
+            (await this.conversationsRepository.isMember(data.conversationId, data.otherUserId))) ||
+          (await this.conversationsRepository.isTeacherStudentPair(data.conversationId, callerId, data.otherUserId));
+        if (!allowed) {
+          this.logger.warn(`[callStarted] rejected: caller=${callerId} may not ring otherUserId=${data.otherUserId} in ${data.conversationId}`);
+          return;
+        }
+        recipientIds = [data.otherUserId];
+      } else {
+        if (!(await this.conversationsRepository.isMember(data.conversationId, callerId))) {
+          this.logger.warn(`[callStarted] rejected: caller=${callerId} not a member of conversationId=${data.conversationId}`);
+          return;
+        }
+        const memberIds = await this.conversationsRepository.getMemberIds(data.conversationId);
+        recipientIds = memberIds.filter((id) => id !== callerId);
+      }
+
+      // Dedup only after authorization, so a stranger can't suppress real
+      // ringing, and entries expire instead of piling up forever.
+      const now = Date.now();
+      const lastCallStart = this.recentCallStarts.get(data.conversationId);
+      if (lastCallStart && now - lastCallStart < CALL_START_DEDUP_WINDOW_MS) {
+        this.logger.log(`[callStarted] deduped: conversationId=${data.conversationId} caller=${callerId} (ringed ${now - lastCallStart}ms ago)`);
         return;
       }
-      const memberIds = await this.conversationsRepository.getMemberIds(data.conversationId);
+      this.recentCallStarts.set(data.conversationId, now);
+      setTimeout(() => {
+        if (this.recentCallStarts.get(data.conversationId) === now) {
+          this.recentCallStarts.delete(data.conversationId);
+        }
+      }, CALL_START_DEDUP_WINDOW_MS);
+
+      const caller = await this.userRepo.findOne({ where: { id: callerId }, select: ['id', 'name', 'lastName'] });
+      const callerName = caller ? `${caller.name || ''} ${caller.lastName || ''}`.trim() : '';
+      const payload = {
+        conversationId: data.conversationId,
+        callerId,
+        callerName: callerName.slice(0, 100) || 'Someone',
+        chatName: data.chatName?.slice(0, 100) || '',
+        chatType: data.chatType,
+      };
       // Admins can join any class to observe from the admin dashboard, but
       // must never be rung like an actual call participant — they're a
       // silent observer, not part of the call.
-      const targets = await this.excludeAdmins(memberIds.filter((id) => id !== data.callerId));
-      this.logger.warn(`[callStarted] group notify targets=${JSON.stringify(targets)} caller=${data.callerId} conversationId=${data.conversationId}`);
+      const targets = await this.excludeAdmins(recipientIds);
+      if (!targets.length) return;
+      this.logger.log(`[callStarted] notify targets=${JSON.stringify(targets)} caller=${callerId} conversationId=${data.conversationId}`);
       this.emitToUsers(targets, 'callStarted', payload);
       this.pushCallNotification(targets, payload);
     } catch (err) {

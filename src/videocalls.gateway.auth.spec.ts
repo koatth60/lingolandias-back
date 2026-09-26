@@ -391,3 +391,98 @@ describe('VideoCallsGateway — chatError carries the tempId of the message it r
     expect(socket.emit).toHaveBeenCalledWith('chatError', { reason: 'not_a_member' });
   });
 });
+
+describe('VideoCallsGateway — callStarted (2026-09-26)', () => {
+  const setup = (repo: any, callerRow: any = { id: ATTACKER, name: 'Real', lastName: 'Caller' }) => {
+    const { gateway } = makeGateway(repo);
+    (gateway as any).userRepo.findOne = jest.fn().mockResolvedValue(callerRow);
+    const emitToUsers = jest.spyOn(gateway as any, 'emitToUsers').mockImplementation(() => undefined);
+    jest.spyOn(gateway as any, 'pushCallNotification').mockImplementation(() => undefined);
+    return { gateway, emitToUsers };
+  };
+
+  it('refuses to ring a 1:1 recipient the caller has no conversation with', async () => {
+    const repo = { ...baseRepo(), isTeacherStudentPair: jest.fn().mockResolvedValue(false) };
+    const { gateway, emitToUsers } = setup(repo);
+
+    await gateway.handleCallStarted(makeSocket(ATTACKER) as any, {
+      conversationId: CONVERSATION,
+      callerId: VICTIM, // forged
+      callerName: 'Your Teacher', // forged
+      chatName: '',
+      chatType: 'dm',
+      otherUserId: VICTIM,
+    });
+
+    expect(emitToUsers).not.toHaveBeenCalled();
+  });
+
+  it('uses the token identity and the DB name, not the payload', async () => {
+    const repo = baseRepo();
+    repo.isMember.mockResolvedValue(true);
+    const { gateway, emitToUsers } = setup(repo);
+
+    await gateway.handleCallStarted(makeSocket(ATTACKER) as any, {
+      conversationId: OTHER_CONVERSATION,
+      callerId: VICTIM, // forged
+      callerName: 'Your Teacher', // forged
+      chatName: '',
+      chatType: 'dm',
+      otherUserId: VICTIM,
+    });
+
+    expect(emitToUsers).toHaveBeenCalledTimes(1);
+    const payload = emitToUsers.mock.calls[0][2] as any;
+    expect(payload.callerId).toBe(ATTACKER);
+    expect(payload.callerName).toBe('Real Caller');
+  });
+});
+
+describe('VideoCallsGateway — support channel (2026-09-26)', () => {
+  const setupSupport = (actorRole: string, existing: any) => {
+    const chatsRepository = {
+      findGlobalChatById: jest.fn().mockResolvedValue(existing),
+      deleteGlobalChat: jest.fn(),
+      editGlobalChat: jest.fn(),
+      saveGlobalChat: jest.fn(),
+    };
+    const { gateway } = makeGateway(baseRepo());
+    (gateway as any).chatsRepository = chatsRepository;
+    (gateway as any).userRepo.findOne = jest
+      .fn()
+      .mockResolvedValue({ id: ATTACKER, name: 'A', lastName: 'B', email: 'a@x.com', role: actorRole });
+    return { gateway, chatsRepository };
+  };
+
+  it('does not let a student post into support', async () => {
+    const { gateway, chatsRepository } = setupSupport('user', null);
+    await gateway.handleSupportChat(makeSocket(ATTACKER) as any, { message: 'hi' });
+    expect(chatsRepository.saveGlobalChat).not.toHaveBeenCalled();
+  });
+
+  it('does not let a teacher delete another teacher\'s message', async () => {
+    const { gateway, chatsRepository } = setupSupport('teacher', {
+      id: MESSAGE,
+      room: 'uuid-support',
+      senderId: VICTIM,
+      email: 'victim@x.com',
+    });
+    await gateway.handleDeleteSupportChat(makeSocket(ATTACKER) as any, { messageId: MESSAGE });
+    expect(chatsRepository.deleteGlobalChat).not.toHaveBeenCalled();
+  });
+
+  it('stores the sender from the database, ignoring forged display fields', async () => {
+    const { gateway, chatsRepository } = setupSupport('teacher', null);
+    (gateway as any).unreadCounterService = { bulkIncrementCounter: jest.fn() };
+    await gateway.handleSupportChat(makeSocket(ATTACKER) as any, {
+      message: 'hello',
+      username: 'Admin',
+      email: 'boss@x.com',
+      userRole: 'admin',
+    } as any);
+    const saved = chatsRepository.saveGlobalChat.mock.calls[0][0];
+    expect(saved.senderId).toBe(ATTACKER);
+    expect(saved.email).toBe('a@x.com');
+    expect(saved.userRole).toBe('teacher');
+  });
+});

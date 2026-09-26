@@ -78,8 +78,30 @@ export class UsersService {
     return removedUser;
   }
 
-  async update(updateUser: any) {
-    const updatedUser = await this.usersRepository.update(updateUser);
+  // Profile fields a user may edit on their own account. The previous
+  // version took the target from `email` in the body and wrote every other
+  // key as a column, so any logged-in user could change anyone's role or
+  // password hash.
+  static readonly EDITABLE_PROFILE_FIELDS = [
+    'name',
+    'lastName',
+    'phone',
+    'address',
+    'city',
+    'country',
+    'postal',
+    'biography',
+  ] as const;
+
+  async update(userId: string, body: any) {
+    const fields: Record<string, unknown> = {};
+    for (const key of UsersService.EDITABLE_PROFILE_FIELDS) {
+      if (body?.[key] !== undefined) fields[key] = body[key];
+    }
+    if (!Object.keys(fields).length) {
+      throw new BadRequestException('No editable fields provided');
+    }
+    const updatedUser = await this.usersRepository.update(userId, fields);
     if (!updatedUser.affected) {
       throw new NotFoundException('User not found');
     }

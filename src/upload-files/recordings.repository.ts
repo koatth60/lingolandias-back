@@ -28,6 +28,10 @@ export class RecordingsRepository {
     });
   }
 
+  async findByS3Key(s3Key: string) {
+    return this.repo.findOneBy({ s3Key });
+  }
+
   async deleteByS3Key(s3Key: string) {
     await this.repo.delete({ s3Key });
   }

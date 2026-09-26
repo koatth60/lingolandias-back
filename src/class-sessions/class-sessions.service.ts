@@ -43,20 +43,29 @@ export class ClassSessionsService {
     return { sessionId: saved.id };
   }
 
-  async heartbeat(sessionId: string) {
-    await this.repo.update({ id: sessionId }, { lastHeartbeat: new Date() });
+  // Each query is scoped to the calling teacher, so nobody can keep alive or
+  // close someone else's session by guessing its id.
+  async heartbeat(sessionId: string, teacherId: string) {
+    await this.repo.update({ id: sessionId, teacherId }, { lastHeartbeat: new Date() });
     return { ok: true };
   }
 
-  async endSession(sessionId: string, durationMinutes: number) {
+  async endSession(sessionId: string, teacherId: string, durationMinutes: number) {
+    const session = await this.repo.findOne({ where: { id: sessionId, teacherId } });
+    if (!session) return { ok: true, ignored: true };
+    // The client measures from when it joined; the server can only vouch for
+    // time since the row was (re)opened. Clamp to that, so a request can't
+    // claim more minutes than actually passed.
+    const elapsed = Math.floor((Date.now() - new Date(session.startTime).getTime()) / 60000);
+    const minutes = Math.max(0, Math.min(Math.round(durationMinutes) || 0, elapsed));
     // Ignore accidental joins under 3 minutes
-    if (durationMinutes < 3) {
-      await this.repo.delete({ id: sessionId });
+    if (minutes < 3) {
+      await this.repo.delete({ id: sessionId, teacherId });
       return { ok: true, ignored: true };
     }
     await this.repo.update(
-      { id: sessionId },
-      { endTime: new Date(), durationMinutes, status: 'completed' },
+      { id: sessionId, teacherId },
+      { endTime: new Date(), durationMinutes: minutes, status: 'completed' },
     );
     return { ok: true };
   }

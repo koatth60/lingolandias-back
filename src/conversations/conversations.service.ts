@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { ConversationsRepository } from './conversations.repository';
 
 @Injectable()
@@ -34,6 +34,21 @@ export class ConversationsService {
   }
 
   addMember(conversationId: string, newUserId: string, opts: { addedBy: string; shareHistory: boolean }) {
+    return this.conversationsRepository.addMember(conversationId, newUserId, opts);
+  }
+
+  // The public route: only an existing member (or an admin) may add people. Without this,
+  // anyone logged in could add themselves to any DM or group (with
+  // shareHistory: true) and read its whole history. UsersService's scheduling
+  // flow keeps calling addMember directly with its own checks.
+  async addMemberAsMember(
+    conversationId: string,
+    newUserId: string,
+    opts: { addedBy: string; shareHistory: boolean },
+  ) {
+    if (!(await this.conversationsRepository.isMemberOrAdmin(conversationId, opts.addedBy))) {
+      throw new ForbiddenException('Only members can add people to this conversation');
+    }
     return this.conversationsRepository.addMember(conversationId, newUserId, opts);
   }
 

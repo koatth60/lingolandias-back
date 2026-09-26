@@ -9,6 +9,7 @@ import { UnreadGlobalMessage } from 'src/chat/entities/unread-global-messages.en
 import { Repository } from 'typeorm';
 import { config as dotenvConfig } from 'dotenv';
 import { ConversationsRepository } from 'src/conversations/conversations.repository';
+import { User } from 'src/users/entities/user.entity';
 dotenvConfig({ path: '.env.development' });
 
 @Injectable()
@@ -29,14 +30,27 @@ export class AuthService {
       throw new BadRequestException('User already exists');
     }
 
+    if (!newUser.email || !newUser.password) {
+      throw new BadRequestException('Email and password are required');
+    }
     const unhasedPassword = newUser.password;
+    // Invitados are created by their teacher through POST /users/invitados.
+    const role = ['user', 'teacher', 'admin'].includes(newUser.role)
+      ? newUser.role
+      : 'user';
 
     const hashedPassword = await bcrypt.hash(newUser.password, 10);
+    // Only the fields the admin form sends. Spreading the whole body let a
+    // caller set any column, including `id` (overwriting an existing user).
     const unsavedReadMessageUser = await this.usersRepository.register({
-      ...newUser,
+      name: newUser.name,
+      lastName: newUser.lastName,
+      email: newUser.email,
+      language: newUser.language,
+      role,
       password: hashedPassword,
       createdAt: new Date(),
-    });
+    } as User);
 
     const unreadGlobalMessage = new UnreadGlobalMessage();
     unreadGlobalMessage.user = unsavedReadMessageUser;
@@ -60,7 +74,7 @@ export class AuthService {
       newUser.email,
       unhasedPassword,
     );
-    return newUser;
+    return unsavedReadMessageUser;
   }
 
   async login(email: string, password: any) {
@@ -120,7 +134,7 @@ export class AuthService {
       id: foundUser.id,
       name: foundUser.name + ' ' + foundUser.lastName,
     });
-    return foundUser;
+    return { message: 'Logged out' };
   }
 
   async forgotPassword(email: string) {

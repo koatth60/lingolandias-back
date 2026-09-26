@@ -13,12 +13,19 @@ import { AuthService } from './auth.service';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { AuthGuard } from './guards/auth.guard';
+import { Roles, RolesGuard } from './guards/roles.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  // Admin-only: accounts are created from the admin panel (UserModal).
+  // This route used to be public and saved the request body as-is, so anyone
+  // on the internet could POST { role: 'admin', ... } and get an admin account.
   @Post('register')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('admin')
   @HttpCode(HttpStatus.OK)
   async register(@Body() newUser: any) {
     return this.authService.register(newUser);
@@ -31,8 +38,13 @@ export class AuthController {
     return this.authService.login(email, password);
   }
 
+  // The user comes from the token. This used to take `userId` from the body
+  // with no guard and return the whole user row, password hash included, to
+  // anyone who knew a user id.
   @Post('logout')
-  async logout(@Body('userId') userId: string) {
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async logout(@CurrentUser('id') userId: string) {
     return this.authService.logout(userId);
   }
 
@@ -58,11 +70,17 @@ export class AuthController {
     );
   }
 
+  // Same fix as logout: the account whose password changes is the caller's,
+  // never one named in the body.
   @Post('change-password')
+  @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
-  async changePassword(@Body() changePasswordDto: ChangePasswordDto) {
+  async changePassword(
+    @CurrentUser('id') userId: string,
+    @Body() changePasswordDto: ChangePasswordDto,
+  ) {
     return this.authService.changePassword(
-      changePasswordDto.userId,
+      userId,
       changePasswordDto.currentPassword,
       changePasswordDto.newPassword,
       changePasswordDto.confirmPassword,

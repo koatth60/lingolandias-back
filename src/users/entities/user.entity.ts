@@ -27,6 +27,19 @@ export class User {
   @Column({ type: 'varchar' })
   password: string;
 
+  // The hash must never leave the server. Every HTTP response and socket emit
+  // is serialized with JSON.stringify, which calls this — including for users
+  // nested in relations (a teacher's `students`, a student's `teacher`).
+  // Before this, the login response carried the hashes of the user and of
+  // every assigned student, and the frontend persisted them in localStorage.
+  // Kept as toJSON rather than `select: false` because login, password reset
+  // and change-password all read the hash off the same finder methods.
+  toJSON() {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { password, ...rest } = this;
+    return rest;
+  }
+
   @Column({ type: 'varchar', nullable: true })
   language: string;
 

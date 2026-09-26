@@ -29,6 +29,12 @@ export class AuthGuard implements CanActivate {
     try {
       const secret = process.env.JWT_SECRET;
       const user = this.jwtService.verify(token, { secret });
+      // Password-reset links are signed with the same secret and carry the
+      // user id, so without this check a reset token worked as a full
+      // access token for its hour of life. Only reset tokens carry `h`.
+      if (user.h !== undefined) {
+        throw new UnauthorizedException('Invalid token');
+      }
       user.exp = new Date(user.exp * 1000);
       user.iat = new Date(user.iat * 1000);
 
