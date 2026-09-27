@@ -7,6 +7,7 @@ import {
   ManyToOne,
   JoinColumn,
   OneToOne,
+  Index,
 } from 'typeorm';
 import { Settings } from './settings.entity';
 
@@ -164,6 +165,12 @@ export class Schedule {
   @Column({ type: 'varchar' })
   studentName: string;
 
+  // Looked up by studentId/teacherId/roomId constantly (a student's or
+  // teacher's own calendar, scheduleBroadcaster's per-room class lookups,
+  // countForPair, findByRoomId) with no index backing any of them — every
+  // one of those was a full table scan. synchronize:true creates these on
+  // next deploy, no manual migration needed.
+  @Index()
   @Column()
   studentId: string;
 
@@ -177,6 +184,7 @@ export class Schedule {
   @JoinColumn({ name: 'studentId' })
   student: User;
 
+  @Index()
   @Column()
   teacherId: string;
 
@@ -195,6 +203,7 @@ export class Schedule {
   // student's own userId), so setting roomId = conversation.id here is a
   // no-op for plain classes and only actually does something once a class is
   // genuinely shared by a group.
+  @Index()
   @Column({ type: 'varchar', nullable: true })
   roomId?: string;
 

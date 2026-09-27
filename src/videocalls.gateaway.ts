@@ -93,7 +93,9 @@ export class VideoCallsGateway
   // renamed, member added/removed) without importing this whole gateway —
   // see ScheduleBroadcaster's own comment for why this indirection exists.
   afterInit(server: Server) {
-    this.scheduleBroadcaster.attach(server);
+    this.scheduleBroadcaster.attach(server, (userIds, event, payload) =>
+      this.emitToUsers(userIds, event, payload),
+    );
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
@@ -202,7 +204,8 @@ export class VideoCallsGateway
               if (user) {
                 user.online = 'offline';
                 await this.userRepo.save(user);
-                this.server.emit('userStatus', {
+                const contacts = await this.conversationsRepository.getContactUserIds(user.id);
+                this.emitToUsers(contacts, 'userStatus', {
                   id: user.id, online: 'offline', name: user.name + ' ' + user.lastName,
                 });
               }
@@ -259,7 +262,8 @@ export class VideoCallsGateway
         if (user) {
           user.online = 'online';
           await this.userRepo.save(user);
-          this.server.emit('userStatus', {
+          const contacts = await this.conversationsRepository.getContactUserIds(user.id);
+          this.emitToUsers(contacts, 'userStatus', {
             id: user.id, online: 'online', name: user.name + ' ' + user.lastName,
           });
         }
@@ -267,30 +271,49 @@ export class VideoCallsGateway
     }
   }
 
-  notifyUserOnline(user: any) {
-    this.server.emit('userStatus', { id: user.id, online: 'online', name: user.name });
+  async notifyUserOnline(user: any) {
+    try {
+      const contacts = await this.conversationsRepository.getContactUserIds(user.id);
+      this.emitToUsers(contacts, 'userStatus', { id: user.id, online: 'online', name: user.name });
+    } catch (err) {
+      this.logger.error(`[notifyUserOnline] error: ${err?.message}`);
+    }
   }
 
-  notifyUserOffline(user: any) {
-    this.server.emit('userStatus', { id: user.id, online: 'offline', name: user.name });
+  async notifyUserOffline(user: any) {
+    try {
+      const contacts = await this.conversationsRepository.getContactUserIds(user.id);
+      this.emitToUsers(contacts, 'userStatus', { id: user.id, online: 'offline', name: user.name });
+    } catch (err) {
+      this.logger.error(`[notifyUserOffline] error: ${err?.message}`);
+    }
   }
 
+  // Every field the frontend actually keys off (schedule.jsx) is already in
+  // the payload — studentId, teacherId/schedule.teacherId, coTeacherIds —
+  // so recipients are derived without a DB round trip.
   notifyScheduleUpdated(payload: {
-    studentId: string; action: 'add' | 'remove' | 'modify'; schedule?: any; eventIds?: string[];
+    studentId: string; teacherId?: string; action: 'add' | 'remove' | 'modify'; schedule?: any; eventIds?: string[];
   }) {
-    this.server.emit('scheduleUpdated', payload);
+    const targets = new Set<string>();
+    if (payload.studentId) targets.add(payload.studentId);
+    if (payload.teacherId) targets.add(payload.teacherId);
+    if (payload.schedule?.teacherId) targets.add(payload.schedule.teacherId);
+    if (payload.schedule?.studentId) targets.add(payload.schedule.studentId);
+    (payload.schedule?.coTeacherIds || []).forEach((id: string) => targets.add(id));
+    this.emitToUsers([...targets], 'scheduleUpdated', payload);
   }
 
   notifyStudentAssigned(payload: {
     teacherId: string; studentId: string; schedules: any[]; student: any; teacher: any;
   }) {
-    this.server.emit('studentAssigned', payload);
+    this.emitToUsers([payload.teacherId, payload.studentId], 'studentAssigned', payload);
   }
 
   notifyStudentRemoved(payload: {
     teacherId: string; studentIds: string[]; deletedScheduleIds: string[];
   }) {
-    this.server.emit('studentRemoved', payload);
+    this.emitToUsers([payload.teacherId, ...payload.studentIds], 'studentRemoved', payload);
   }
 
   // Server-initiated conversation + first message (e.g. the credentials
@@ -557,7 +580,18 @@ export class VideoCallsGateway
       );
 
       this.server.to(SUPPORT_ROOM).emit('supportChat', globalChatData);
-      socket.broadcast.emit('newUnreadSupportMessage', { room: SUPPORT_ROOM });
+      // Only teachers/admins ever see the support channel (see
+      // getSupportActor) — broadcasting to every connected socket used to
+      // reach every logged-in student too, for an event their UI ignores.
+      const staff = await this.userRepo.find({
+        where: [{ role: 'teacher' }, { role: 'admin' }],
+        select: ['id'],
+      });
+      this.emitToUsers(
+        staff.map((u) => u.id).filter((id) => id !== actor.id),
+        'newUnreadSupportMessage',
+        { room: SUPPORT_ROOM },
+      );
     } catch (err) {
       this.logger.error(`[supportChat] error: ${err?.message}`);
     }
@@ -619,7 +653,8 @@ export class VideoCallsGateway
   }
 
   // Filters recipientIds down to members who opted into messageNotifications
-  // and haven't muted this conversation, then fires a push to each.
+  // and haven't muted this conversation, then fires one grouped push instead
+  // of one DB lookup + one webpush call per recipient run one after another.
   private async sendNewMessagePushes(
     conversationId: string,
     recipientIds: string[],
@@ -633,11 +668,11 @@ export class VideoCallsGateway
       this.conversationsRepository.getConversationBasic(conversationId),
     ]);
     const chatName = conversation?.type === 'group' ? conversation.name : undefined;
-    for (const recipient of recipients) {
-      if (mutedByUserId.get(recipient.id)) continue;
-      if (!recipient.settings?.messageNotifications) continue;
-      await this.pushService.sendNewMessagePush(recipient.id, { senderName, preview, chatName });
-    }
+    const targets = recipients
+      .filter((recipient) => !mutedByUserId.get(recipient.id) && recipient.settings?.messageNotifications)
+      .map((recipient) => recipient.id);
+    if (!targets.length) return;
+    await this.pushService.sendNewMessagePushBulk(targets, { senderName, preview, chatName });
   }
 
   private emitToUsers(userIds: string[], event: string, payload: any) {
@@ -717,16 +752,26 @@ export class VideoCallsGateway
       const mentionedUserIds = this.extractMentionedUserIds(safe).filter(
         (id) => id !== senderId && memberIds.includes(id),
       );
+      // Display identity comes from the users table, never the payload — the
+      // client used to send its own username/email/avatarUrl/userRole and
+      // they were stored as-is, so anyone could post a message that rendered
+      // with a forged name, avatar or role (e.g. impersonating "Admin").
+      // Same fix as the support channel (getSupportActor) below, applied
+      // here for the main conversation model.
+      const sender = await this.userRepo.findOne({
+        where: { id: senderId },
+        select: ['id', 'name', 'lastName', 'email', 'avatarUrl', 'role'],
+      });
       const saved = await this.conversationsRepository.saveMessage({
         conversationId: data.conversationId,
         senderId,
-        username: data.username?.slice(0, 100) || 'User',
-        email: data.email?.slice(0, 200) || '',
-        avatarUrl: data.avatarUrl,
+        username: (`${sender?.name || ''} ${sender?.lastName || ''}`.trim() || 'User').slice(0, 100),
+        email: (sender?.email || '').slice(0, 200),
+        avatarUrl: sender?.avatarUrl,
         message: safe,
         fileUrl: data.fileUrl,
-        userUrl: data.userUrl,
-        userRole: data.userRole,
+        userUrl: sender?.avatarUrl,
+        userRole: sender?.role,
         replyTo: data.replyTo || null,
         messageType: data.messageType === 'missed_call' ? 'missed_call' : undefined,
         mentionedUserIds: mentionedUserIds.length ? mentionedUserIds : null,
@@ -774,11 +819,9 @@ export class VideoCallsGateway
           senderName: saved.username,
           preview,
         });
-        for (const userId of mentionedUserIds) {
-          this.pushService
-            .sendMentionPush(userId, { senderName: saved.username, preview, conversationId: data.conversationId })
-            .catch((err) => this.logger.error(`sendMentionPush failed userId=${userId}`, err));
-        }
+        this.pushService
+          .sendMentionPushBulk(mentionedUserIds, { senderName: saved.username, preview })
+          .catch((err) => this.logger.error(`sendMentionPushBulk failed conversationId=${data?.conversationId}`, err));
       }
     } catch (err) {
       this.logger.error(
@@ -902,7 +945,11 @@ export class VideoCallsGateway
       if (!isMember) return;
       const emoji = (data.emoji || '').trim().slice(0, 8);
       if (!emoji) return;
-      const userName = (data.userName || '').trim().slice(0, 100) || 'Someone';
+      // Display name from the users table, not data.userName — a reaction
+      // used to store whatever display name the client claimed, the same
+      // hole handleSendConversationMessage had for message authorship.
+      const reactor = await this.userRepo.findOne({ where: { id: userId }, select: ['id', 'name', 'lastName'] });
+      const userName = (`${reactor?.name || ''} ${reactor?.lastName || ''}`.trim() || 'Someone').slice(0, 100);
       const reactions = await this.conversationsRepository.toggleReaction(data.messageId, userId, userName, emoji);
       this.server.to(data.conversationId).emit('messageReactionUpdated', {
         conversationId: data.conversationId,
@@ -1053,6 +1100,46 @@ export class VideoCallsGateway
         calleeId: data.calleeId,
       });
     } catch (_) {}
+  }
+
+  // Fired by the caller's own client (JitsiClassRoom) the moment THEY hang
+  // up while still alone in the room — i.e. nobody answered yet. Without
+  // this, the callee's IncomingCallBanner kept ringing until its own
+  // CALL_RING_TIMEOUT_MS client-side timeout, well after the call was
+  // already gone. Same recipient resolution as callStarted (whoever would
+  // have been rung), minus the dedup/push/DB-name lookup — this only needs
+  // to reach a banner that's live right now, and a moment late does nothing.
+  @SubscribeMessage('callCanceled')
+  async handleCallCanceled(
+    socket: Socket,
+    data: { conversationId: string; otherUserId?: string },
+  ) {
+    try {
+      if (!this.isAuthenticated(socket)) return;
+      const callerId = this.resolveSocketUserId(socket);
+      if (!callerId) return;
+      if (!this.isValidRoom(data.conversationId)) return;
+
+      let recipientIds: string[];
+      if (data.otherUserId) {
+        const allowed =
+          ((await this.conversationsRepository.isMember(data.conversationId, callerId)) &&
+            (await this.conversationsRepository.isMember(data.conversationId, data.otherUserId))) ||
+          (await this.conversationsRepository.isTeacherStudentPair(data.conversationId, callerId, data.otherUserId));
+        if (!allowed) return;
+        recipientIds = [data.otherUserId];
+      } else {
+        if (!(await this.conversationsRepository.isMember(data.conversationId, callerId))) return;
+        const memberIds = await this.conversationsRepository.getMemberIds(data.conversationId);
+        recipientIds = memberIds.filter((id) => id !== callerId);
+      }
+
+      const targets = await this.excludeAdmins(recipientIds);
+      if (!targets.length) return;
+      this.emitToUsers(targets, 'callCanceled', { conversationId: data.conversationId, callerId });
+    } catch (err) {
+      this.logger.error(`[callCanceled] error: ${err?.message}`);
+    }
   }
 
 }

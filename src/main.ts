@@ -28,7 +28,7 @@ async function bootstrap() {
   // `Object`, and only a real DTO class gets validated) — so this is safe to
   // turn on globally. Before this, no pipe was bound anywhere at all, so the
   // handful of DTOs that already carried class-validator decorators
-  // (ResetPasswordDto, UpdateSettingsDto, GetArchivedChatsDto) silently
+  // (ResetPasswordDto, UpdateSettingsDto) silently
   // enforced nothing: a password reset accepted a 1-character password, and
   // an out-of-range settings page number was passed straight through.
   //

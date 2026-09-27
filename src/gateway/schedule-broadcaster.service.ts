@@ -8,14 +8,20 @@ import { Server } from 'socket.io';
 // without creating a module import cycle between GatewayModule and
 // ConversationsModule. VideoCallsGateway attaches the real server once it's
 // bound (see its afterInit hook); every call before that is a harmless no-op.
+type EmitToUsers = (userIds: string[], event: string, payload: any) => void;
+
 @Injectable()
 export class ScheduleBroadcaster {
   private server?: Server;
+  private emitToUsers?: EmitToUsers;
 
-  attach(server: Server) {
+  attach(server: Server, emitToUsers: EmitToUsers) {
     this.server = server;
+    this.emitToUsers = emitToUsers;
   }
 
+  // Same recipients as VideoCallsGateway.notifyScheduleUpdated — derived
+  // from the payload, not a broadcast to every connected socket.
   notifyScheduleUpdated(payload: {
     studentId: string;
     teacherId?: string;
@@ -23,7 +29,13 @@ export class ScheduleBroadcaster {
     schedule?: any;
     eventIds?: string[];
   }) {
-    this.server?.emit('scheduleUpdated', payload);
+    const targets = new Set<string>();
+    if (payload.studentId) targets.add(payload.studentId);
+    if (payload.teacherId) targets.add(payload.teacherId);
+    if (payload.schedule?.teacherId) targets.add(payload.schedule.teacherId);
+    if (payload.schedule?.studentId) targets.add(payload.schedule.studentId);
+    (payload.schedule?.coTeacherIds || []).forEach((id: string) => targets.add(id));
+    this.emitToUsers?.([...targets], 'scheduleUpdated', payload);
   }
 
   // Pushes a saved Message row (system-event or otherwise) to everyone

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import * as webpush from 'web-push';
 import { PushSubscription } from './push-subscription.entity';
@@ -69,29 +69,47 @@ export class PushService {
     await this.sendPush(userId, title, 'Tap to join', url);
   }
 
-  // Unlike sendNewMessagePush, deliberately NOT gated on messageNotifications
-  // or this conversation being muted — being personally @mentioned is a
-  // different, more direct kind of notification than "someone posted in a
-  // chat you're in", the same way muting a busy group channel still lets a
-  // direct mention through on Slack/Teams.
-  async sendMentionPush(
-    userId: string,
-    params: { senderName: string; preview: string; conversationId: string },
-  ) {
-    const title = `${params.senderName} mentioned you`;
-    await this.sendPush(userId, title, params.preview, '/messages');
-  }
-
-  // Reaches a member of a conversation even when their tab/browser is fully
-  // closed. Caller (VideoCallsGateway) has already filtered out the sender,
-  // anyone who muted this conversation, and anyone who hasn't opted into
-  // messageNotifications — this just formats and sends.
-  async sendNewMessagePush(
-    userId: string,
+  // Every recipient of a new message or a mention gets the identical
+  // title/body (same sender, same preview) — so a group message used to
+  // cost one DB lookup + one webpush HTTP call PER RECIPIENT, run one after
+  // another (a group of 20 waited on 20 sequential round trips). This
+  // fetches every recipient's subscription in one query and fires the
+  // webpush calls concurrently instead.
+  async sendNewMessagePushBulk(
+    userIds: string[],
     params: { senderName: string; preview: string; chatName?: string },
   ) {
     const title = params.chatName ? `${params.senderName} in ${params.chatName}` : params.senderName;
-    await this.sendPush(userId, title, params.preview, '/messages');
+    await this.sendBulkPush(userIds, title, params.preview, '/messages');
+  }
+
+  async sendMentionPushBulk(userIds: string[], params: { senderName: string; preview: string }) {
+    await this.sendBulkPush(userIds, `${params.senderName} mentioned you`, params.preview, '/messages');
+  }
+
+  private async sendBulkPush(userIds: string[], title: string, body: string, url = '/') {
+    if (!userIds.length) return;
+    const subscriptions = await this.subscriptionRepository.find({ where: { userId: In(userIds) } });
+    if (!subscriptions.length) return;
+    const payload = JSON.stringify({ title, body, icon: '/logo.png', url });
+    const staleUserIds: string[] = [];
+    await Promise.allSettled(
+      subscriptions.map(async (subscription) => {
+        const pushSubscription = {
+          endpoint: subscription.endpoint,
+          keys: { p256dh: subscription.p256dh, auth: subscription.auth },
+        };
+        try {
+          await webpush.sendNotification(pushSubscription, payload);
+        } catch (err) {
+          this.logger.error(
+            `Push failed for user ${subscription.userId}: status=${err.statusCode} body=${JSON.stringify(err.body)}`,
+          );
+          if (err.statusCode === 410 || err.statusCode === 404) staleUserIds.push(subscription.userId);
+        }
+      }),
+    );
+    if (staleUserIds.length) await this.subscriptionRepository.delete({ userId: In(staleUserIds) });
   }
 
   // Board owner's heads-up that one of their Trello 2.0 cards is due soon —

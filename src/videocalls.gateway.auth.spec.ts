@@ -36,7 +36,7 @@ const makeGateway = (conversationsRepository: any) => {
     { verify: jest.fn() } as any, // jwtService
     { findOne: jest.fn().mockResolvedValue(null), find: jest.fn().mockResolvedValue([]), update: jest.fn() } as any, // userRepo
     conversationsRepository,
-    { sendMentionPush: jest.fn().mockResolvedValue(undefined) } as any,
+    { sendMentionPushBulk: jest.fn().mockResolvedValue(undefined), sendNewMessagePushBulk: jest.fn().mockResolvedValue(undefined) } as any,
     { attach: jest.fn() } as any,
   );
 
@@ -116,6 +116,52 @@ describe('VideoCallsGateway — sender identity', () => {
 
     expect(repo.saveMessage).not.toHaveBeenCalled();
     expect(socket.emit).toHaveBeenCalledWith('chatError', { reason: 'not_authenticated' });
+  });
+});
+
+describe('VideoCallsGateway — display identity comes from the DB, not the payload (2026-09-27)', () => {
+  it('saves username/email/avatarUrl/role from the sender\'s DB row, ignoring the forged payload', async () => {
+    const repo = baseRepo();
+    repo.isMember.mockResolvedValue(true);
+    repo.getMemberIds.mockResolvedValue([ATTACKER]);
+    const { gateway } = makeGateway(repo);
+    (gateway as any).userRepo.findOne = jest.fn().mockResolvedValue({
+      id: ATTACKER, name: 'Real', lastName: 'Name', email: 'real@example.com',
+      avatarUrl: 'https://real.example/avatar.png', role: 'user',
+    });
+
+    await gateway.handleSendConversationMessage(makeSocket(ATTACKER) as any, {
+      conversationId: CONVERSATION,
+      senderId: ATTACKER,
+      username: 'Admin', // forged
+      email: 'admin@lingo.test', // forged
+      avatarUrl: 'https://evil.example/fake-admin.png', // forged
+      userRole: 'admin', // forged
+      message: 'hi',
+    } as any);
+
+    const saved = repo.saveMessage.mock.calls[0][0];
+    expect(saved.username).toBe('Real Name');
+    expect(saved.email).toBe('real@example.com');
+    expect(saved.avatarUrl).toBe('https://real.example/avatar.png');
+    expect(saved.userRole).toBe('user');
+  });
+
+  it('stores the reactor\'s DB name, ignoring a forged userName', async () => {
+    const repo = baseRepo();
+    repo.isMember.mockResolvedValue(true);
+    (repo as any).toggleReaction = jest.fn().mockResolvedValue({ '👍': [{ id: ATTACKER, name: 'Real Name' }] });
+    const { gateway } = makeGateway(repo);
+    (gateway as any).userRepo.findOne = jest.fn().mockResolvedValue({ id: ATTACKER, name: 'Real', lastName: 'Name' });
+
+    await gateway.handleToggleReaction(makeSocket(ATTACKER) as any, {
+      conversationId: CONVERSATION,
+      messageId: MESSAGE,
+      emoji: '👍',
+      userName: 'Admin', // forged
+    } as any);
+
+    expect((repo as any).toggleReaction).toHaveBeenCalledWith(MESSAGE, ATTACKER, 'Real Name', '👍');
   });
 });
 
@@ -435,6 +481,68 @@ describe('VideoCallsGateway — callStarted (2026-09-26)', () => {
     const payload = emitToUsers.mock.calls[0][2] as any;
     expect(payload.callerId).toBe(ATTACKER);
     expect(payload.callerName).toBe('Real Caller');
+  });
+});
+
+describe('VideoCallsGateway — callCanceled (2026-09-27)', () => {
+  // The caller's own client fires this the moment they hang up while still
+  // alone in the room (nobody answered yet), so the callee's
+  // IncomingCallBanner stops ringing immediately instead of waiting out the
+  // rest of CALL_RING_TIMEOUT_MS.
+  it('tells the 1:1 recipient to stop ringing', async () => {
+    const repo = baseRepo();
+    repo.isMember.mockResolvedValue(true);
+    const { gateway } = makeGateway(repo);
+    const emitToUsers = jest.spyOn(gateway as any, 'emitToUsers').mockImplementation(() => undefined);
+
+    await gateway.handleCallCanceled(makeSocket(ATTACKER) as any, {
+      conversationId: CONVERSATION,
+      otherUserId: VICTIM,
+    });
+
+    expect(emitToUsers).toHaveBeenCalledWith([VICTIM], 'callCanceled', {
+      conversationId: CONVERSATION,
+      callerId: ATTACKER,
+    });
+  });
+
+  it('refuses to cancel a call for someone the caller has no conversation with', async () => {
+    const repo = { ...baseRepo(), isTeacherStudentPair: jest.fn().mockResolvedValue(false) };
+    const { gateway } = makeGateway(repo);
+    const emitToUsers = jest.spyOn(gateway as any, 'emitToUsers').mockImplementation(() => undefined);
+
+    await gateway.handleCallCanceled(makeSocket(ATTACKER) as any, {
+      conversationId: CONVERSATION,
+      otherUserId: VICTIM,
+    });
+
+    expect(emitToUsers).not.toHaveBeenCalled();
+  });
+
+  it('notifies every other group member, not just one', async () => {
+    const THIRD_MEMBER = '77777777-7777-7777-7777-777777777777';
+    const repo = baseRepo();
+    repo.isMember.mockResolvedValue(true);
+    repo.getMemberIds.mockResolvedValue([ATTACKER, VICTIM, THIRD_MEMBER]);
+    const { gateway } = makeGateway(repo);
+    const emitToUsers = jest.spyOn(gateway as any, 'emitToUsers').mockImplementation(() => undefined);
+
+    await gateway.handleCallCanceled(makeSocket(ATTACKER) as any, { conversationId: CONVERSATION });
+
+    expect(emitToUsers).toHaveBeenCalledWith([VICTIM, THIRD_MEMBER], 'callCanceled', expect.anything());
+  });
+
+  it('ignores an unauthenticated socket', async () => {
+    const repo = baseRepo();
+    const { gateway } = makeGateway(repo);
+    const emitToUsers = jest.spyOn(gateway as any, 'emitToUsers').mockImplementation(() => undefined);
+
+    await gateway.handleCallCanceled(makeSocket(undefined) as any, {
+      conversationId: CONVERSATION,
+      otherUserId: VICTIM,
+    });
+
+    expect(emitToUsers).not.toHaveBeenCalled();
   });
 });
 

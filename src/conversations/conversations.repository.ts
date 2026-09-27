@@ -125,6 +125,47 @@ export class ConversationsRepository {
     return rows.map((r) => r.userId);
   }
 
+  // Who should hear this user's online/offline status: everyone who shares a
+  // conversation with them, plus their assigned teacher/students and anyone
+  // they have a scheduled class with (a teacher-student pair doesn't always
+  // have a Conversation row yet — legacy class rooms are keyed by studentId,
+  // not a real conversation). Used instead of broadcasting userStatus to
+  // every connected socket platform-wide.
+  async getContactUserIds(userId: string): Promise<string[]> {
+    const ids = new Set<string>();
+
+    const memberships = await this.memberRepo.find({ where: { userId } });
+    const conversationIds = memberships
+      .map((m) => m.conversationId)
+      .filter((id) => id !== 'uuid-support');
+    if (conversationIds.length) {
+      const memberRows = await this.memberRepo.find({ where: { conversationId: In(conversationIds) } });
+      memberRows.forEach((r) => ids.add(r.userId));
+    }
+
+    const self = await this.userRepo.findOne({
+      where: { id: userId },
+      relations: ['teacher'],
+      select: { id: true, teacher: { id: true } },
+    });
+    if (self?.teacher?.id) ids.add(self.teacher.id);
+
+    const students = await this.userRepo.find({ where: { teacher: { id: userId } }, select: ['id'] as any });
+    students.forEach((s) => ids.add((s as any).id));
+
+    const schedules = await this.scheduleRepo.find({
+      where: [{ teacherId: userId }, { studentId: userId }],
+      select: ['teacherId', 'studentId'] as any,
+    });
+    schedules.forEach((s) => {
+      ids.add(s.teacherId);
+      ids.add(s.studentId);
+    });
+
+    ids.delete(userId);
+    return [...ids];
+  }
+
   // Used when deciding who should get a push notification for a new message —
   // a member who muted this specific conversation never should, regardless of
   // their global push-notification preference.
