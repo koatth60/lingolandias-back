@@ -387,13 +387,15 @@ export class VideoCallsGateway
   @SubscribeMessage('typing')
   handleTyping(socket: Socket, data: { room: string; username: string }) {
     if (!this.isValidRoom(data.room)) return;
-    socket.broadcast.to(data.room).emit('typing', { username: data.username });
+    // The room is included so clients can ignore typing from their other
+    // open rooms (one socket is in several rooms at once).
+    socket.broadcast.to(data.room).emit('typing', { username: data.username, room: data.room });
   }
 
   @SubscribeMessage('stopTyping')
   handleStopTyping(socket: Socket, data: { room: string }) {
     if (!this.isValidRoom(data.room)) return;
-    socket.broadcast.to(data.room).emit('stopTyping', {});
+    socket.broadcast.to(data.room).emit('stopTyping', { room: data.room });
   }
 
   @SubscribeMessage('getRoomMembers')
@@ -731,7 +733,14 @@ export class VideoCallsGateway
         timestamp: new Date(),
       });
 
-      this.server.to(data.conversationId).emit('conversationMessage', saved);
+      // clientTempId lets the sender swap its optimistic placeholder for this
+      // exact message. The client used to guess by text and a 10-second
+      // timestamp window, which failed whenever the device clock was off:
+      // the message showed twice, once as "not sent", and Retry sent a copy.
+      this.server.to(data.conversationId).emit('conversationMessage', {
+        ...saved,
+        clientTempId: typeof data.tempId === 'string' ? data.tempId.slice(0, 64) : undefined,
+      });
 
       // Notify every member's personal sockets (not just those with the room
       // open) so their conversation list preview/unread badge updates live.
