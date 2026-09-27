@@ -121,7 +121,17 @@ export class UsersService {
     return result;
   }
 
-  async modifySchedule(body: any) {
+  // The body carries only the event's own id, no teacherId — before this,
+  // any logged-in user who knew or guessed a Schedule row's id could move
+  // any teacher's class to any time.
+  async modifySchedule(body: any, callerId: string) {
+    const schedule = await this.scheduleRepository.findById(body?.eventId);
+    if (!schedule) {
+      throw new NotFoundException('Schedule not found');
+    }
+    if (schedule.teacherId !== callerId && (await this.getRole(callerId)) !== 'admin') {
+      throw new ForbiddenException("Not this teacher's class");
+    }
     const updatedSchedule = await this.scheduleRepository.modifySchedule(body);
     if (!updatedSchedule) {
       throw new NotFoundException('Schedule not found');
@@ -177,6 +187,25 @@ export class UsersService {
     return 'success';
   }
 
+  /** Just the role, cheap enough to call on every ownership check below. */
+  async getRole(userId: string): Promise<string | null> {
+    const user = await this.usersRepository.findById(userId);
+    return user?.role ?? null;
+  }
+
+  // student-profile/student-schedules are keyed on the target student's own
+  // id (a client-supplied param), never checked against who's asking —
+  // before this, any logged-in user could pull any student's assigned
+  // teacher and full schedule by guessing/enumerating ids.
+  async assertCanViewStudent(callerId: string, studentId: string) {
+    if (callerId === studentId) return;
+    const caller = await this.usersRepository.findById(callerId);
+    if (caller?.role === 'admin') return;
+    const student = await this.usersRepository.findById(studentId);
+    if (caller?.role === 'teacher' && student?.teacher?.id === callerId) return;
+    throw new ForbiddenException('Not allowed to view this student');
+  }
+
   async getStudentSchedules(studentId: string) {
     return this.scheduleRepository.findByStudentId(studentId);
   }
@@ -203,14 +232,31 @@ export class UsersService {
   // demand (e.g. on the Schedule page mounting) instead of only ever seeing
   // whatever was loaded at login plus whatever live socket events happened
   // to arrive while that page was open.
-  async getTeacherProfile(teacherId: string) {
+  //
+  // Also reachable by anyone booking a class with this teacher (to see their
+  // busy slots), so callerId decides how much of each row comes back: the
+  // teacher themself or an admin gets the real studentName/studentId/student
+  // relation; everyone else gets times only. Before this, any logged-in user
+  // — any student anywhere — could read the name of every OTHER student any
+  // teacher has, just by knowing that teacher's id.
+  async getTeacherProfile(teacherId: string, callerId?: string) {
     const user = await this.usersRepository.findById(teacherId);
     if (!user) throw new NotFoundException('Teacher not found');
     // Classes this teacher owns (teacherId) plus classes they're a
     // co-teacher/guest on (coTeacherIds) — the relation used above only
     // ever covers the former.
     const coTeaching = await this.scheduleRepository.findCoTeaching(teacherId);
-    return { teacherSchedules: [...(user.teacherSchedules || []), ...coTeaching] };
+    const rows = [...(user.teacherSchedules || []), ...coTeaching];
+
+    const canSeeStudents =
+      callerId === teacherId || (callerId ? (await this.getRole(callerId)) === 'admin' : false);
+    if (canSeeStudents) return { teacherSchedules: rows };
+
+    const anonymized = rows.map((row) => {
+      const { studentName, studentId, student, ...rest } = row as any;
+      return rest;
+    });
+    return { teacherSchedules: anonymized };
   }
 
   async getAdminStats() {

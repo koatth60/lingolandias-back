@@ -169,6 +169,10 @@ export class ScheduleRepository {
     return this.repository.save(schedule);
   }
 
+  async findById(eventId: string): Promise<Schedule | null> {
+    return this.repository.findOne({ where: { id: eventId } });
+  }
+
   async modifySchedule(body: any): Promise<Schedule> {
     const { eventId, start, end, newEvent } = body;
     const schedule = await this.repository.findOne({ where: { id: eventId } });

@@ -4,6 +4,7 @@ import {
   Post,
   Body,
   Delete,
+  ForbiddenException,
   HttpStatus,
   HttpCode,
   Patch,
@@ -18,45 +19,68 @@ import { Roles, RolesGuard } from '../auth/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 // import { UpdateUserDto } from './dto/update-user.dto';
 
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, RolesGuard)
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  // The caller must be the teacher named in the body, or an admin acting on
+  // their behalf (the admin panel's teacher-assignment screens). Every real
+  // scheduling screen already sends the logged-in teacher's own id here —
+  // this only closes the gap where any other logged-in user could send a
+  // different teacherId and act as them.
+  private async assertActingTeacher(callerId: string, teacherId: string) {
+    if (callerId === teacherId) return;
+    const role = await this.usersService.getRole(callerId);
+    if (role !== 'admin') throw new ForbiddenException('Not this teacher');
+  }
+
+  // Admin panel only: lists every account, hashes excluded but every other
+  // field (phone, address, email) included.
   @Get()
+  @Roles('admin')
   @HttpCode(HttpStatus.OK)
   findAll(@Query() query: any) {
     return this.usersService.findAll({
       page: parseInt(query.page) || 1,
-      limit: Math.min(parseInt(query.limit) || 50, 200),
+      limit: Math.min(parseInt(query.limit) || 200, 200),
     });
   }
 
   @Get('admin-dashboard')
+  @Roles('admin')
   @HttpCode(HttpStatus.OK)
   adminDashboard() {
     return this.usersService.findAdminDashboard();
   }
 
   @Get('admin-stats')
+  @Roles('admin')
   @HttpCode(HttpStatus.OK)
   getAdminStats() {
     return this.usersService.getAdminStats();
   }
 
   @Get('analytics')
+  @Roles('admin')
   @HttpCode(HttpStatus.OK)
   getAnalytics() {
     return this.usersService.getAnalytics();
   }
 
+  // Every teacher's full student list (name, email, phone, address — not
+  // just names) with no role check at all. Both screens that call this
+  // (admin panel, admin analytics) are admin-only already; the route itself
+  // was not.
   @Get('teachers')
+  @Roles('admin')
   @HttpCode(HttpStatus.OK)
   findTeachers() {
     return this.usersService.findTeachers();
   }
 
   @Get('students/paginated')
+  @Roles('admin')
   @HttpCode(HttpStatus.OK)
   findStudentsPaginated(@Query() query: any) {
     return this.usersService.findStudentsPaginated({
@@ -68,6 +92,8 @@ export class UsersController {
     });
   }
 
+  // Open to any logged-in user (used to add people to DMs/groups) — already
+  // returns a fixed, non-sensitive field list, no password, no phone/address.
   @Get('search')
   @HttpCode(HttpStatus.OK)
   searchUsers(@Query() query: any) {
@@ -84,25 +110,48 @@ export class UsersController {
     return this.usersService.getPublicProfile(id);
   }
 
+  // Not called from the frontend today, but reachable by anyone logged in —
+  // restricted to the student themself, their assigned teacher, or an admin.
   @Get('student-schedules/:studentId')
   @HttpCode(HttpStatus.OK)
-  getStudentSchedules(@Param('studentId') studentId: string) {
+  async getStudentSchedules(
+    @Param('studentId') studentId: string,
+    @CurrentUser('id') callerId: string,
+  ) {
+    await this.usersService.assertCanViewStudent(callerId, studentId);
     return this.usersService.getStudentSchedules(studentId);
   }
 
+  // Every real caller passes their own id; restricted to self, the
+  // student's assigned teacher, or an admin so a client-supplied id can't
+  // pull someone else's teacher assignment and schedules.
   @Get('student-profile/:studentId')
   @HttpCode(HttpStatus.OK)
-  getStudentProfile(@Param('studentId') studentId: string) {
+  async getStudentProfile(
+    @Param('studentId') studentId: string,
+    @CurrentUser('id') callerId: string,
+  ) {
+    await this.usersService.assertCanViewStudent(callerId, studentId);
     return this.usersService.getStudentProfile(studentId);
   }
 
+  // Deliberately left open to any logged-in user beyond the teacher
+  // themself: the class-booking screens (picking a time with a teacher who
+  // isn't the caller's own) need to see that teacher's busy slots. Each
+  // slot's studentName/studentId is only meant for the teacher's own view —
+  // see UsersService.getTeacherProfile for how it's scoped per caller.
   @Get('teacher-profile/:teacherId')
   @HttpCode(HttpStatus.OK)
-  getTeacherProfile(@Param('teacherId') teacherId: string) {
-    return this.usersService.getTeacherProfile(teacherId);
+  getTeacherProfile(
+    @Param('teacherId') teacherId: string,
+    @CurrentUser('id') callerId: string,
+  ) {
+    return this.usersService.getTeacherProfile(teacherId, callerId);
   }
 
+  // Admin panel only (studentAssignment.jsx).
   @Post('assignstudent')
+  @Roles('admin')
   @HttpCode(HttpStatus.OK)
   assignStudent(@Body() body: any) {
     return this.usersService.assignStudent(body);
@@ -141,7 +190,6 @@ export class UsersController {
 
   // Deletes an account and its schedules and boards — admin panel only.
   @Delete()
-  @UseGuards(RolesGuard)
   @Roles('admin')
   @HttpCode(HttpStatus.OK)
   remove(@Body() body: any) {
@@ -151,33 +199,40 @@ export class UsersController {
 
   @Post('add-event')
   @HttpCode(HttpStatus.OK)
-  addEvent(@Body() body: any) {
+  async addEvent(@Body() body: any, @CurrentUser('id') callerId: string) {
+    await this.assertActingTeacher(callerId, body?.teacherId);
     return this.usersService.addEvent(body);
   }
 
   @Post('removeStudentsFromTeacher')
   @HttpCode(HttpStatus.OK)
-  removeStudentsFromTeacher(@Body() body: any) {
+  async removeStudentsFromTeacher(@Body() body: any, @CurrentUser('id') callerId: string) {
+    await this.assertActingTeacher(callerId, body?.teacherId);
     return this.usersService.removeStudentsFromTeacher(body);
   }
 
+  // The body has no teacherId (only the event's own id) — ownership is
+  // checked against the Schedule row itself. See UsersService.modifySchedule.
   @Patch('modify-schedule')
   @HttpCode(HttpStatus.OK)
-  async modifySchedule(@Body() body: any) {
-    return this.usersService.modifySchedule(body);
+  async modifySchedule(@Body() body: any, @CurrentUser('id') callerId: string) {
+    return this.usersService.modifySchedule(body, callerId);
   }
 
   @Post('removeEvents')
   @HttpCode(HttpStatus.OK)
-  removeEvents(
+  async removeEvents(
     @Body() body: { eventIds: string[]; teacherId: string; studentId: string },
+    @CurrentUser('id') callerId: string,
   ) {
+    await this.assertActingTeacher(callerId, body?.teacherId);
     return this.usersService.removeEvents(body);
   }
 
   @Post('schedule-group')
   @HttpCode(HttpStatus.OK)
-  scheduleGroup(@Body() body: any) {
+  async scheduleGroup(@Body() body: any, @CurrentUser('id') callerId: string) {
+    await this.assertActingTeacher(callerId, body?.teacherId);
     return this.usersService.scheduleGroup(body);
   }
 
@@ -193,7 +248,12 @@ export class UsersController {
 
   @Post('schedule-group/:roomId/extend')
   @HttpCode(HttpStatus.OK)
-  extendScheduleGroup(@Param('roomId') roomId: string, @Body() body: any) {
+  async extendScheduleGroup(
+    @Param('roomId') roomId: string,
+    @Body() body: any,
+    @CurrentUser('id') callerId: string,
+  ) {
+    await this.assertActingTeacher(callerId, body?.teacherId);
     return this.usersService.extendScheduleGroup(roomId, body);
   }
 }

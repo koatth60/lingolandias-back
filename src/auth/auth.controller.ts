@@ -9,12 +9,21 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { AuthGuard } from './guards/auth.guard';
 import { Roles, RolesGuard } from './guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+
+// The app-wide default (120 req/min per IP, see AppModule) covers ordinary
+// traffic; these routes get their own tighter budget because they're either
+// a password-guessing target (login, change-password) or send an email per
+// call (register was already admin-gated in Phase 0; forgot-password and
+// resend-friendly reset/register still want their own ceiling so a script
+// can't mail-bomb an inbox or brute-force a login for anyone's account).
+const AUTH_THROTTLE = { default: { limit: 10, ttl: 60_000 } };
 
 @Controller('auth')
 export class AuthController {
@@ -32,6 +41,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Throttle(AUTH_THROTTLE)
   @HttpCode(HttpStatus.OK)
   async login(@Body() credentials: any) {
     const { email, password } = credentials;
@@ -56,12 +66,14 @@ export class AuthController {
   }
 
   @Post('forgot-password')
+  @Throttle(AUTH_THROTTLE)
   @HttpCode(HttpStatus.OK)
   async forgotPassword(@Body('email') email: string) {
     return this.authService.forgotPassword(email);
   }
 
   @Post('reset-password')
+  @Throttle(AUTH_THROTTLE)
   async resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
     return this.authService.setNewPassword(
       resetPasswordDto.token,
@@ -73,6 +85,7 @@ export class AuthController {
   // Same fix as logout: the account whose password changes is the caller's,
   // never one named in the body.
   @Post('change-password')
+  @Throttle(AUTH_THROTTLE)
   @UseGuards(AuthGuard)
   @HttpCode(HttpStatus.OK)
   async changePassword(

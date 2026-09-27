@@ -17,7 +17,8 @@ import { TrelloModule } from './trello/trello.module';
 import { PushModule } from './push/push.module';
 import { ClassSessionsModule } from './class-sessions/class-sessions.module';
 import { MeetingLogsModule } from './meeting-logs/meeting-logs.module';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { ConversationsModule } from './conversations/conversations.module';
 import { HealthModule } from './health/health.module';
 
@@ -64,6 +65,14 @@ import { HealthModule } from './health/health.module';
     HealthModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // ThrottlerModule.forRoot above only registers the limit — nothing
+    // actually enforced it anywhere except chat-presign's own explicit
+    // guard. This makes the 120/min default apply everywhere; individual
+    // routes (login, register, password reset/change) tighten it further
+    // with their own @Throttle().
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
 })
 export class AppModule {}

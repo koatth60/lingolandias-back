@@ -1,15 +1,34 @@
 import { Body, Controller, Get, Post, HttpCode, HttpStatus } from '@nestjs/common';
+import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { AppService } from './app.service';
 import { MailService } from './mail/mail.service';
 
+// Undecorated fields disappear under the app-wide ValidationPipe's
+// `whitelist` (it drops any property with no class-validator decorator at
+// all) — these two DTOs had none, so every field would have silently gone
+// missing the moment that pipe was turned on.
 class ContactDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
   name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
   number?: string;
+
+  @IsEmail()
   email: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(5000)
   message: string;
 }
 
 class NewsletterDto {
+  @IsEmail()
   email: string;
 }
 

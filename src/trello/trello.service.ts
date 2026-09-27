@@ -161,4 +161,32 @@ export class TrelloService {
       orderedIds.map((id, i) => this.cardRepo.update({ id, listId }, { position: i })),
     );
   }
+
+  // ─── Ownership lookups ──────────────────────────────────────────────────
+  // Used by TrelloController's ownership guard. Every mutation above used to
+  // take only an id with no check at all — any logged-in user could read,
+  // edit or delete any other user's board, list or card just by knowing (or
+  // guessing) its uuid.
+
+  async getBoardOwnerId(boardId: string): Promise<string | null> {
+    const board = await this.boardRepo.findOne({ where: { id: boardId }, select: ['userId'] });
+    return board?.userId ?? null;
+  }
+
+  async getListOwnerId(listId: string): Promise<string | null> {
+    const list = await this.listRepo.findOne({ where: { id: listId }, select: ['boardId'] });
+    if (!list) return null;
+    return this.getBoardOwnerId(list.boardId);
+  }
+
+  async getCardOwnerId(cardId: string): Promise<string | null> {
+    const card = await this.cardRepo.findOne({ where: { id: cardId }, select: ['listId'] });
+    if (!card) return null;
+    return this.getListOwnerId(card.listId);
+  }
+
+  async getUserRole(userId: string): Promise<string | null> {
+    const user = await this.userRepo.findOne({ where: { id: userId }, select: ['id', 'role'] });
+    return user?.role ?? null;
+  }
 }
